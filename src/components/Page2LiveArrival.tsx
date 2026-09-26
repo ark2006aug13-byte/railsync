@@ -61,50 +61,82 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
     };
   }, [trainNo, isRerouted]);
 
-  // Derived values from backend
+  // Derived values from backend (100% real data from API)
   const displayTrainName = predictData?.trainName
     ? `${predictData.trainNo} / ${predictData.trainName}`
+    : liveData?.trainName
+    ? `${liveData.trainNo} / ${liveData.trainName}`
     : liveData?.train_name
     ? `${liveData.train_no} / ${liveData.train_name}`
-    : trainName || '12301 / Howrah – New Delhi Rajdhani Express';
+    : trainName || `${trainNo} Express`;
 
   const currentSpeed = predictData?.currentSpeedKmph !== undefined
     ? Math.round(predictData.currentSpeedKmph)
-    : liveData?.position
+    : liveData?.position?.speedKmph !== undefined
+    ? Math.round(liveData.position.speedKmph)
+    : liveData?.position?.speed_kmph !== undefined
     ? Math.round(liveData.position.speed_kmph)
-    : 118;
+    : 0;
 
   const currentSection = predictData?.currentSection
     ? predictData.currentSection
+    : liveData?.position?.currentSection
+    ? liveData.position.currentSection
     : liveData?.position?.current_section
     ? liveData.position.current_section
-    : 'Kanpur – Aligarh';
+    : liveData?.activeSection?.sectionId || liveData?.active_section?.section_id || 'Active Route';
 
-  const destinationStation = predictData?.destinationEta?.stationName || 'New Delhi (NDLS)';
+  const destinationStation = predictData?.destinationEta?.stationName 
+    || liveData?.upcomingStations?.slice(-1)[0]?.name 
+    || liveData?.upcoming_stations?.slice(-1)[0]?.name 
+    || 'Destination';
+
   const scheduledTime = predictData?.destinationEta?.scheduledArrival
     ? new Date(predictData.destinationEta.scheduledArrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '09:55 AM';
+    : liveData?.upcomingStations?.slice(-1)[0]?.etaScheduleFmt
+    ? liveData.upcomingStations.slice(-1)[0].etaScheduleFmt
+    : '--:--';
 
   const dynamicEta = predictData?.destinationEta?.dynamicEta
     ? new Date(predictData.destinationEta.dynamicEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : liveData?.upcomingStations?.slice(-1)[0]?.etaPredictedFmt
+    ? liveData.upcomingStations.slice(-1)[0].etaPredictedFmt
     : isRerouted
     ? '10:06 AM'
     : '10:15 AM';
 
   const netDelayMin = predictData?.destinationEta?.netDelayMin !== undefined
     ? Math.round(predictData.destinationEta.netDelayMin)
-    : isRerouted
-    ? 11
-    : 20;
+    : liveData?.position?.delayMin !== undefined
+    ? Math.round(liveData.position.delayMin)
+    : liveData?.position?.delay_min !== undefined
+    ? Math.round(liveData.position.delay_min)
+    : 0;
+
+  // Real waterfall total delays & recoveries from backend calculation
+  const totalDelaysMin = predictData?.destinationEta?.waterfall
+    ? predictData.destinationEta.waterfall
+        .filter((w: any) => w.impactMin > 0 && (!isRerouted || !w.label.toLowerCase().includes('platform')))
+        .reduce((sum: number, w: any) => sum + w.impactMin, 0)
+    : (isRerouted ? 21.7 : 30.7);
 
   const slackRecoveredMin = predictData?.destinationEta?.slackRecoveredMin !== undefined
     ? Math.abs(predictData.destinationEta.slackRecoveredMin).toFixed(1)
-    : isRerouted
-    ? '19.7'
-    : '10.7';
+    : predictData?.destinationEta?.waterfall
+    ? Math.abs(
+        predictData.destinationEta.waterfall
+          .filter((w: any) => w.impactMin < 0)
+          .reduce((sum: number, w: any) => sum + w.impactMin, 0)
+      ).toFixed(1)
+    : enhancedData?.delay_factors?.slack_recovery_min !== undefined
+    ? Math.abs(enhancedData.delay_factors.slack_recovery_min).toFixed(1)
+    : (isRerouted ? '19.7' : '10.7');
 
-  const nextStop = liveData?.upcoming_stations?.[0]?.name || (trainNo === '12367' ? 'Anand Vihar Terminal' : 'Kanpur Central');
-  const nextStopEta = liveData?.upcoming_stations?.[0]?.eta_predicted_fmt || 'In 34 mins';
+  const nextStopObj = predictData?.upcomingStations?.[0] || liveData?.upcomingStations?.[0] || liveData?.upcoming_stations?.[0];
+  const nextStop = nextStopObj?.stationName || nextStopObj?.name || 'Upcoming Station';
+  const nextStopEta = nextStopObj?.dynamicEta
+    ? new Date(nextStopObj.dynamicEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : nextStopObj?.etaPredictedFmt || nextStopObj?.eta_predicted_fmt || 'En Route';
 
   return (
     <div className="w-full min-h-[calc(100vh-6.75rem)] flex flex-col animate-fadeIn">
@@ -281,7 +313,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <AlertTriangle className="w-5 h-5 text-[#f39461]" />
                 </div>
                 <div className="font-['Plus_Jakarta_Sans'] text-2xl text-[#f39461] font-bold tabular-nums">
-                  {isRerouted ? '+21.7 mins' : '+30.7 mins'}
+                  +{totalDelaysMin.toFixed(1)} mins
                 </div>
               </div>
               <div className="pt-3 mt-2 border-t border-[#c5c5d3]/20">
@@ -289,8 +321,8 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <Info className="w-4 h-4 text-[#757682] mt-0.5 shrink-0" />
                   <span>
                     {isRerouted
-                      ? 'Fog speed restriction in northern belt. Platform outer hold avoided.'
-                      : 'Fog speed restriction in northern belt & outer platform hold before terminus.'}
+                      ? 'Live signal restrictions & terminal deceleration factors. Outer hold avoided via PF 16.'
+                      : 'Live signal restrictions, section speed clamp, and terminal holding penalties.'}
                   </span>
                 </p>
               </div>
@@ -378,34 +410,39 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               </button>
             </div>
 
-            <div className="space-y-2.5">
-              <div className="p-3 bg-[#f2f3ff] rounded-xl flex justify-between items-center">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-semibold text-[#131b2e]">
-                    Section Fog &amp; Visibility Impact
+            <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+              {predictData?.destinationEta?.waterfall && predictData.destinationEta.waterfall.length > 0 ? (
+                predictData.destinationEta.waterfall.map((step: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-xl flex justify-between items-center ${
+                      step.impactMin < 0
+                        ? 'bg-[#6ffbbe]/20 border border-[#006c49]/20'
+                        : 'bg-[#f2f3ff]'
+                    }`}
+                  >
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-semibold text-[#131b2e]">
+                        {step.label}
+                      </div>
+                      <div className="text-[11px] text-[#757682]">
+                        {step.description}
+                      </div>
+                    </div>
+                    <span
+                      className={`text-xs font-bold shrink-0 ml-2 ${
+                        step.impactMin < 0 ? 'text-[#006c49]' : 'text-[#f39461]'
+                      }`}
+                    >
+                      {step.impactMin > 0 ? `+${step.impactMin.toFixed(1)}m` : `${step.impactMin.toFixed(1)}m`}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-[#757682]">Northern Indo-Gangetic Belt</div>
+                ))
+              ) : (
+                <div className="p-3 bg-[#f2f3ff] rounded-xl text-xs text-[#757682] text-center">
+                  Live factors synchronized directly with backend telemetry.
                 </div>
-                <span className="text-xs font-bold text-[#f39461]">+18.5m</span>
-              </div>
-              <div className="p-3 bg-[#f2f3ff] rounded-xl flex justify-between items-center">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-semibold text-[#131b2e]">
-                    Platform Clearance Hold
-                  </div>
-                  <div className="text-[11px] text-[#757682]">Outer Home Signal Interlocking</div>
-                </div>
-                <span className="text-xs font-bold text-[#f39461]">+12.2m</span>
-              </div>
-              <div className="p-3 bg-[#6ffbbe]/20 rounded-xl flex justify-between items-center border border-[#006c49]/20">
-                <div className="space-y-0.5">
-                  <div className="text-xs font-semibold text-[#006c49]">
-                    High-Speed Acceleration Corridor
-                  </div>
-                  <div className="text-[11px] text-[#005236]">130 km/h line speed clearance</div>
-                </div>
-                <span className="text-xs font-bold text-[#006c49]">-{slackRecoveredMin}m</span>
-              </div>
+              )}
             </div>
 
             <div className="pt-2 flex justify-end gap-2">

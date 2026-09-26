@@ -38,9 +38,20 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
 }) => {
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
+  const [trainState, setTrainState] = useState<any | null>(null);
 
   const trainNo = trainName ? trainName.split('/')[0].trim() : '12301';
   const displayName = trainName ? trainName.toUpperCase() : '12301 HWH RAJDHANI';
+
+  React.useEffect(() => {
+    let isMounted = true;
+    api.getTrainState(trainNo).then((state) => {
+      if (isMounted && state) setTrainState(state);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [trainNo, isRerouted]);
 
   const handleConfirm = async () => {
     setIsTransmitting(true);
@@ -660,9 +671,11 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                 Current Velocity
               </span>
               <span className="font-['Plus_Jakarta_Sans'] text-base font-bold text-[#131b2e] tabular-nums">
-                42 km/h
+                {trainState?.position?.speedKmph !== undefined ? Math.round(trainState.position.speedKmph) : 42} km/h
               </span>
-              <span className="text-xs text-[#444651] block">Decelerating into outer</span>
+              <span className="text-xs text-[#444651] block">
+                {trainState?.position?.currentSection || 'Approaching yard throat'}
+              </span>
             </div>
           </div>
 

@@ -4,99 +4,202 @@
  */
 
 export interface TrainOverview {
-  train_no: string;
+  trainNo?: string;
+  train_no?: string;
   name: string;
   type: string;
   origin: string;
   destination: string;
-  total_distance_km: number;
-  mps: number;
-  priority: number;
+  totalDistanceKm?: number;
+  total_distance_km?: number;
+  mps?: number;
+  priority?: number;
+  stationsCount?: number;
+  availableDates?: string[];
+  defaultDate?: string;
 }
 
 export interface TrainStatePosition {
-  ts: string;
-  km: number;
-  speed_kmph: number;
-  delay_min: number;
-  current_section: string;
-  current_mps: number;
-  status: string;
   lat: number;
   lng: number;
+  km: number;
+  speedKmph?: number;
+  speed_kmph?: number;
+  delayMin?: number;
+  delay_min?: number;
+  currentSection?: string;
+  current_section?: string;
+  sectionId?: string;
+  section_id?: string;
+  currentMps?: number;
+  current_mps?: number;
+  ts?: string;
+  status?: string;
 }
 
 export interface LeadingTrainState {
-  train_no: string;
+  trainNo?: string;
+  train_no?: string;
   name: string;
   km: number;
-  speed_kmph: number;
-  delay_min: number;
-  headway_gap_km: number;
+  lat?: number;
+  lng?: number;
+  speedKmph?: number;
+  speed_kmph?: number;
+  delayMin?: number;
+  delay_min?: number;
+  headwayGapKm?: number;
+  headway_gap_km?: number;
 }
 
 export interface SignalAspect {
   code: string;
+  name?: string;
   badge: string;
   color: string;
-  speed_cap: number;
-  headway_gap_km: number;
+  speedCap?: string;
+  speed_cap?: number | string;
+  headwayGapKm?: number;
+  headway_gap_km?: number;
 }
 
 export interface StationStop {
   code: string;
   name: string;
   km: number;
-  platform: string;
-  scheduled_arrival: string;
-  scheduled_departure: string;
-  eta_predicted: string;
+  platform: string | number;
+  scheduled_arrival?: string;
+  scheduled_departure?: string;
+  etaPredicted?: string;
+  eta_predicted?: string;
+  etaPredictedFmt?: string;
   eta_predicted_fmt?: string;
-  predicted_delay_min: number;
+  etaSchedule?: string;
+  eta_schedule?: string;
+  etaScheduleFmt?: string;
+  eta_schedule_fmt?: string;
+  predictedDelayMin?: number;
+  predicted_delay_min?: number;
+  delayInjectedMin?: number;
   delay_injected_min?: number;
+  timeDeletionMin?: number;
   time_deletion_min?: number;
+  platformConflict?: boolean;
   platform_conflict?: boolean;
+  outerHoldingMin?: number;
   outer_holding_min?: number;
+  conflictingTrain?: string | null;
   conflicting_train?: string | null;
   why?: string;
+  weatherCondition?: string;
   weather_condition?: string;
+  signalStatus?: string;
   signal_status?: string;
   status?: string;
 }
 
 export interface TrainStateResponse {
-  train_no: string;
-  train_name: string;
-  run_date: string;
-  simulated_time: string;
-  simulated_time_fmt: string;
-  min_time: string;
-  max_time: string;
+  trainNo?: string;
+  train_no?: string;
+  trainName?: string;
+  train_name?: string;
+  runDate?: string;
+  run_date?: string;
+  simulatedTime?: string;
+  simulated_time?: string;
+  simulatedTimeFmt?: string;
+  simulated_time_fmt?: string;
+  minTime?: string;
+  min_time?: string;
+  maxTime?: string;
+  max_time?: string;
   position: TrainStatePosition;
-  active_section: {
-    section_id: string;
-    from_stn: string;
-    to_stn: string;
-    length_km: number;
-    mps: number;
+  activeSection?: {
+    sectionId?: string;
+    section_id?: string;
+    from_stn?: string;
+    to_stn?: string;
+    length_km?: number;
+    mps?: number;
   };
-  leading_train: LeadingTrainState;
-  signal_aspect: SignalAspect;
-  upcoming_stations: StationStop[];
-  passed_stations: StationStop[];
-  is_complete: boolean;
-  last_updated: string;
+  active_section?: {
+    section_id?: string;
+    from_stn?: string;
+    to_stn?: string;
+    length_km?: number;
+    mps?: number;
+  };
+  leadingTrain?: LeadingTrainState;
+  leading_train?: LeadingTrainState;
+  signalAspect?: SignalAspect;
+  signal_aspect?: SignalAspect;
+  upcomingStations?: StationStop[];
+  upcoming_stations?: StationStop[];
+  passedStations?: StationStop[];
+  passed_stations?: StationStop[];
+  isComplete?: boolean;
+  is_complete?: boolean;
+  lastUpdated?: string;
+  last_updated?: string;
+}
+
+export interface WaterfallStep {
+  label: string;
+  impactMin: number;
+  category: string;
+  description: string;
+}
+
+export interface ConfidenceBounds {
+  p10Time: string;
+  p50Time: string;
+  p90Time: string;
+  confidencePercentage: number;
+}
+
+export interface DestinationEta {
+  stationCode: string;
+  stationName: string;
+  scheduledArrival: string;
+  dynamicEta: string;
+  netDelayMin: number;
+  confidence?: ConfidenceBounds;
+  waterfall?: WaterfallStep[];
+  activeWarnings?: string[];
+  tsrDelayMin?: number;
+  platformHoldMin?: number;
+  slackRecoveredMin?: number;
+}
+
+export interface TrainPredictionResponse {
+  trainNo: string;
+  trainName: string;
+  currentKm: number;
+  currentSpeedKmph: number;
+  currentSection: string;
+  signalAspect: string;
+  headwayGapKm: number;
+  destinationEta: DestinationEta;
+  upcomingStations: DestinationEta[];
+  telemetrySource?: string;
+  deadReckonedKm?: number;
 }
 
 export interface InflowTrain {
-  train_id: string;
-  train_no: string;
-  train_name: string;
-  assigned_platform: string;
+  id?: string;
+  train_id?: string;
+  trainNumber?: string;
+  train_no?: string;
+  trainName?: string;
+  train_name?: string;
+  assigned_platform?: string;
+  platform?: string;
   target_platform?: string;
-  eta_minutes: number;
-  conflict: boolean;
-  priority_tier: number;
+  eta_minutes?: number;
+  varianceMinutes?: number;
+  conflict?: boolean;
+  hasConflict?: boolean;
+  priority_tier?: number;
   lead_train_id?: string;
   status?: string;
 }
@@ -110,12 +213,14 @@ export interface PlatformOccupancy {
 }
 
 export interface InflowResponse {
-  timestamp: string;
+  timestamp?: string;
   station: string;
-  inflow_queue: InflowTrain[];
-  platform_occupancy: Record<string, PlatformOccupancy>;
-  conflict_count: number;
-  headway_buffer_min: number;
+  inflow_queue?: InflowTrain[];
+  inflowTrains?: InflowTrain[];
+  platform_occupancy?: Record<string, PlatformOccupancy>;
+  platformOccupancy?: Record<string, PlatformOccupancy>;
+  conflict_count?: number;
+  headway_buffer_min?: number;
 }
 
 export interface EnhancedEtaResponse {
@@ -290,12 +395,12 @@ export const api = {
   /**
    * Predict and Analyze ANY Train by Number or Name dynamically from backend ML models
    */
-  async predictTrain(query: string): Promise<any> {
+  async predictTrain(query: string): Promise<TrainPredictionResponse | null> {
     try {
       const res = await fetch(`/api/train/predict?query=${encodeURIComponent(query)}`);
       if (res.ok) return await res.json();
     } catch (e) {
-      console.warn('API predictTrain fallback:', e);
+      console.warn('API predictTrain error:', e);
     }
     return null;
   },
