@@ -9,6 +9,7 @@ import { GanttScheduleScreen } from './components/screens/GanttScheduleScreen';
 import { TelemetryStreamScreen } from './components/screens/TelemetryStreamScreen';
 import { InterlockingVisualizerScreen } from './components/screens/InterlockingVisualizerScreen';
 import { TurnaroundRosterScreen } from './components/screens/TurnaroundRosterScreen';
+import { LiveRadarScreen } from './components/screens/LiveRadarScreen';
 import { AppView } from './types';
 import { TrainProvider, useTrain } from './context/TrainContext';
 
@@ -40,6 +41,13 @@ function AppContent() {
       <main className="flex-1 pb-16">
         {currentView === 'home' && (
           <HomeScreen
+            onNavigate={(view) => setCurrentView(view)}
+            onSelectTrain={(no) => setSelectedTrainNo(no)}
+          />
+        )}
+
+        {currentView === 'live-radar' && (
+          <LiveRadarScreen
             onNavigate={(view) => setCurrentView(view)}
             onSelectTrain={(no) => setSelectedTrainNo(no)}
           />

@@ -1,5 +1,6 @@
 export type AppView = 
   | 'home' 
+  | 'live-radar'
   | 'train-status' 
   | 'dynamic-eta' 
   | 'operations-console' 
@@ -411,4 +412,53 @@ export interface OperationsInflowResponse {
     blockClearance: string;
     interlockingLoopCycleSec: number;
   };
+}
+
+export interface RadarTrain {
+  trainNumber: string;
+  trainName: string;
+  type: 'Vande Bharat' | 'Rajdhani' | 'Shatabdi' | 'Superfast' | 'Mail/Express' | 'Freight' | 'Special';
+  source: string;
+  sourceCode: string;
+  destination: string;
+  destinationCode: string;
+  currentLat: number;
+  currentLng: number;
+  bearing: number;
+  speedKmph: number;
+  maxSpeedKmph: number;
+  delayMinutes: number;
+  status: 'on-time' | 'slight-delay' | 'heavy-delay';
+  currentStation: string;
+  currentStationCode: string;
+  nextStation: string;
+  nextStationCode: string;
+  nextStationDistanceKm: number;
+  nextStationEta: string;
+  timeDeletionMinutes: number;
+  weatherSummary: string;
+  locoClass: string;
+  locoNumber: string;
+  zone: string;
+  distanceCoveredKm: number;
+  totalDistanceKm: number;
+  routeCoordinates?: [number, number][];
+  upcomingStations?: {
+    code: string;
+    name: string;
+    scheduledArrival: string;
+    dynamicEta: string;
+    platform: string;
+    delayDeltaMin: number;
+  }[];
+}
+
+export interface RadarJunctionHalo {
+  code: string;
+  name: string;
+  lat: number;
+  lng: number;
+  activeTrainsCount: number;
+  congestionLevel: 'low' | 'moderate' | 'high' | 'severe';
+  throatSpeedLimitKmph: number;
 }

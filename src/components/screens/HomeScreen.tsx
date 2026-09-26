@@ -64,6 +64,35 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onSelectTrai
         </p>
       </div>
 
+      {/* Live Train Radar Feature Banner */}
+      <div className="max-w-3xl mx-auto p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 text-white border border-cyan-500/40 shadow-xl shadow-cyan-950/30 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/30 shrink-0">
+            <Radio className="w-6 h-6 animate-pulse text-cyan-300" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-sm tracking-tight text-white">
+                All-India Live Train Radar
+              </span>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                FlightRadar24 Style
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Watch every Indian Railways train move live on an interactive dark satellite GPS map with directional bearing and time deletion analytics.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => onNavigate('live-radar')}
+          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+        >
+          <span>Open Live Radar</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+
       {/* Main Search Component */}
       <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-xl shadow-slate-200/60 border border-slate-200/90 p-5 md:p-6 transition-all hover:border-blue-300">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">

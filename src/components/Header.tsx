@@ -13,7 +13,8 @@ import {
   BarChart3,
   Calendar,
   Zap,
-  ChevronDown
+  ChevronDown,
+  Radar
 } from 'lucide-react';
 import { AppView } from '../types';
 
@@ -142,6 +143,18 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Quick Direct Screens Menu */}
         <nav className="flex items-center gap-1 overflow-x-auto py-1 max-w-[55vw]">
+          <button
+            onClick={() => onNavigate('live-radar')}
+            className={`px-3 py-1 text-xs font-bold rounded-md whitespace-nowrap transition-all flex items-center gap-1.5 shadow-sm cursor-pointer ${
+              currentView === 'live-radar' 
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white border border-cyan-400 shadow-cyan-500/25 ring-2 ring-cyan-500/20' 
+                : 'text-cyan-300 hover:text-white hover:bg-cyan-950/60 border border-cyan-700/50'
+            }`}
+          >
+            <Radar className="w-3.5 h-3.5 text-cyan-400 animate-spin" style={{ animationDuration: '6s' }} />
+            <span>Live Radar 🛰️</span>
+          </button>
+
           <button
             onClick={() => onNavigate('home')}
             className={`px-2.5 py-1 text-xs font-medium rounded-md whitespace-nowrap transition-colors flex items-center gap-1.5 ${
