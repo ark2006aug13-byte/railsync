@@ -1,0 +1,32 @@
+{
+  "feature_columns": [
+    "section_code_enc",
+    "scheduled_runtime",
+    "entry_delay_min",
+    "hour_of_day",
+    "day_of_week",
+    "fog_flag",
+    "historical_avg_runtime_section",
+    "historical_avg_runtime_train",
+    "train_recovery_rate_prev",
+    "congestion_proxy"
+  ],
+  "target_column": "actual_runtime_min",
+  "section_historical_means": {
+    "HWH-BWN": 78.6,
+    "BWN-ASN": 114.3,
+    "ASN-DHN": 40.7,
+    "DHN-GAYA": 158.3,
+    "GAYA-DDU": 124.8,
+    "DDU-PRYJ": 123.5,
+    "PRYJ-CNB": 136.4,
+    "CNB-NDLS": 290.3
+  },
+  "test_mae": 11.4,
+  "test_rmse": 16.83,
+  "schedule_baseline_mae": 23.63,
+  "error_reduction_pct": 51.7,
+  "residual_std": 16.83,
+  "training_runs_count": 45,
+  "test_runs_count": 15
+}

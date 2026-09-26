@@ -1,0 +1,6 @@
+{
+  "name": "RailSync Operations",
+  "description": "Indian Railways Dynamic ETA Intelligence, Real-Time NavIC RTIS Telemetry, and NDLS Station Operations Interlocking Console",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
