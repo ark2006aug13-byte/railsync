@@ -1,7 +1,28 @@
 import React, { useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  AlertTriangle,
+  Building2,
+  Route,
+  Clock,
+  CheckCircle,
+  Lock,
+  FileText,
+  Zap,
+  Check,
+  Gauge,
+  Users,
+  Activity,
+  X,
+  Train,
+  Radio,
+  ShieldCheck,
+} from 'lucide-react';
 import { api } from '../services/api';
 
 interface Page4PlatformResolverProps {
+  trainName?: string;
   isRerouted: boolean;
   onConfirmReroute: () => void;
   onNavigateToPage2: () => void;
@@ -9,6 +30,7 @@ interface Page4PlatformResolverProps {
 }
 
 export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
+  trainName,
   isRerouted,
   onConfirmReroute,
   onNavigateToPage2,
@@ -17,10 +39,13 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
 
+  const trainNo = trainName ? trainName.split('/')[0].trim() : '12301';
+  const displayName = trainName ? trainName.toUpperCase() : '12301 HWH RAJDHANI';
+
   const handleConfirm = async () => {
     setIsTransmitting(true);
     try {
-      await api.resolveConflict('12301', '16');
+      await api.resolveConflict(trainNo, '16');
     } catch (e) {
       console.warn('Conflict resolution network error:', e);
     }
@@ -41,9 +66,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
               onClick={onNavigateToPage3}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ffffff] text-[#131b2e] hover:bg-[#eaedff] transition-colors shadow-xs border border-[#c5c5d3]/30 text-xs font-semibold cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[16px] text-[#00236f]">
-                arrow_back
-              </span>
+              <ArrowLeft className="w-4 h-4 text-[#00236f]" />
               <span>Back to Delay Breakdown</span>
             </button>
             <div className="h-4 w-[1px] bg-[#c5c5d3]/50 hidden sm:block"></div>
@@ -80,7 +103,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
           <div className="flex items-center gap-2 self-start sm:self-auto">
             <span className="text-xs text-[#757682] font-medium">Target Rake:</span>
             <span className="font-['Plus_Jakarta_Sans'] text-sm sm:text-base font-bold text-[#00236f]">
-              12301 HWH RAJDHANI
+              {displayName}
             </span>
           </div>
         </div>
@@ -91,7 +114,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
               <div className="flex items-start gap-3.5">
                 <div className="w-10 h-10 rounded-xl bg-[#ba1a1a] text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <span className="material-symbols-outlined text-[24px]">warning</span>
+                  <AlertTriangle className="w-6 h-6 text-white" />
                 </div>
                 <div>
                   <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-[#ba1a1a]/10 text-[#ba1a1a] text-[10px] font-bold uppercase tracking-wider mb-2">
@@ -99,7 +122,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                     Critical Platform Bottleneck • +9.0 Min Penalty
                   </div>
                   <h2 className="font-['Plus_Jakarta_Sans'] text-lg sm:text-xl font-bold text-[#131b2e] mb-1">
-                    Outer Signal Hold Alert: Train 12301
+                    Outer Signal Hold Alert: Train {trainNo}
                   </h2>
                   <p className="text-xs sm:text-sm text-[#444651] max-w-2xl leading-relaxed">
                     Assigned to <strong className="text-[#131b2e] font-bold">Platform 12</strong>.
@@ -107,7 +130,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                     <span className="font-bold text-[#131b2e]">
                       Train 12876 (Neelachal Exp)
                     </span>{' '}
-                    is running 15 mins late and still occupying PF 12. Train 12301 will be held at Outer Signal (+9.0 mins penalty).
+                    is running 15 mins late and still occupying PF 12. Train {trainNo} will be held at Outer Signal (+9.0 mins penalty).
                   </p>
                 </div>
               </div>
@@ -129,9 +152,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   Current Assigned Platform
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[#ba1a1a] text-[18px]">
-                    domain_disabled
-                  </span>
+                  <Building2 className="w-4 h-4 text-[#ba1a1a]" />
                   <span className="text-sm font-bold text-[#131b2e]">PF 12</span>
                   <span className="text-[10px] font-bold text-[#ba1a1a] bg-[#ffdad6] px-1.5 py-0.5 rounded">
                     Occupied
@@ -147,9 +168,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   Block Section
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[#757682] text-[18px]">
-                    straighten
-                  </span>
+                  <Route className="w-4 h-4 text-[#757682]" />
                   <span className="text-sm font-bold text-[#131b2e] truncate">
                     Yamuna Bridge Outer
                   </span>
@@ -164,9 +183,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   Imposed Holding Delay
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[#ba1a1a] text-[18px]">
-                    timer_off
-                  </span>
+                  <Clock className="w-4 h-4 text-[#ba1a1a]" />
                   <span className="text-xs font-bold text-[#ba1a1a]">
                     +9.0 mins avoidable halt
                   </span>
@@ -185,13 +202,11 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
               <div className="flex items-start gap-4">
                 <div className="w-12 h-12 rounded-xl bg-[#006c49] text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <span className="material-symbols-outlined text-[28px]">
-                    check_circle
-                  </span>
+                  <CheckCircle className="w-7 h-7 text-white" />
                 </div>
                 <div className="flex flex-col">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#006c49] text-white text-[10px] font-bold uppercase tracking-wider w-fit mb-1.5">
-                    <span className="material-symbols-outlined text-[14px]">lock</span>
+                    <Lock className="w-3.5 h-3.5" />
                     Interlocking Route Locked
                   </div>
                   <h2 className="font-['Plus_Jakarta_Sans'] text-lg sm:text-xl font-bold text-[#002113]">
@@ -203,11 +218,9 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   </p>
                   <div className="mt-3.5 p-3 rounded-xl bg-[#ffffff] text-[#131b2e] flex flex-col gap-1 shadow-xs border border-[#006c49]/20 text-xs">
                     <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-[#006c49] text-[16px]">
-                        receipt_long
-                      </span>
+                      <FileText className="w-4 h-4 text-[#006c49]" />
                       <span className="font-bold text-[#131b2e]">
-                        Dispatch Receipt #NDLS-202505-12301
+                        Dispatch Receipt #NDLS-{trainNo}
                       </span>
                     </div>
                     <p className="text-[#444651] text-[11px]">
@@ -235,7 +248,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#00236f] text-white hover:bg-[#1e3a8a] transition-colors shadow-xs text-xs font-bold mt-2 cursor-pointer"
                 >
                   <span>Return to Live Arrival Tracker</span>
-                  <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                  <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -248,7 +261,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#c5c5d3]/20 pb-5">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-[#dce1ff] text-[#00236f] flex items-center justify-center">
-                <span className="material-symbols-outlined text-[20px]">bolt</span>
+                <Zap className="w-5 h-5 text-[#00236f]" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
@@ -261,14 +274,12 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   </span>
                 </div>
                 <h3 className="font-['Plus_Jakarta_Sans'] text-base sm:text-lg font-bold text-[#131b2e]">
-                  Reroute Train 12301 to Platform 16 (Currently Empty &amp; Clear)
+                  Reroute Train {trainNo} to Platform 16 (Currently Empty &amp; Clear)
                 </h3>
               </div>
             </div>
             <div className="flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full bg-[#6ffbbe]/40 text-[#005236] text-[11px] font-bold border border-[#006c49]/20">
-              <span className="material-symbols-outlined text-[16px] text-[#006c49]">
-                verified
-              </span>
+              <CheckCircle className="w-4 h-4 text-[#006c49]" />
               <span>Route Verified Clear via Crossover 42B</span>
             </div>
           </div>
@@ -308,9 +319,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                 </div>
               </div>
               <div className="pt-3 mt-3 border-t border-[#c5c5d3]/30 flex items-center gap-2 text-[#444651] text-[11px]">
-                <span className="material-symbols-outlined text-[16px] text-[#ba1a1a]">
-                  railway_alert
-                </span>
+                <AlertTriangle className="w-4 h-4 text-[#ba1a1a]" />
                 <span>Requires full halt at Yamuna signal for 9 mins</span>
               </div>
             </div>
@@ -349,7 +358,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                 </div>
               </div>
               <div className="pt-3 mt-3 border-t border-[#c5c5d3]/40 flex items-center gap-2 text-[#006c49] text-[11px] font-semibold">
-                <span className="material-symbols-outlined text-[16px]">check</span>
+                <Check className="w-4 h-4 text-[#006c49]" />
                 <span>Direct berthing via Switch 42B. Zero outer halt.</span>
               </div>
             </div>
@@ -359,7 +368,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-xl bg-[#f2f3ff] border border-[#c5c5d3]/20">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-lg bg-[#ffffff] text-[#006c49] flex items-center justify-center shrink-0 shadow-xs border border-[#c5c5d3]/20">
-                <span className="material-symbols-outlined text-[20px]">speed</span>
+                <Gauge className="w-5 h-5 text-[#006c49]" />
               </div>
               <div>
                 <span className="text-[10px] text-[#757682] block uppercase tracking-wider font-bold">
@@ -375,7 +384,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
             </div>
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-lg bg-[#ffffff] text-[#00236f] flex items-center justify-center shrink-0 shadow-xs border border-[#c5c5d3]/20">
-                <span className="material-symbols-outlined text-[20px]">schedule</span>
+                <Clock className="w-5 h-5 text-[#00236f]" />
               </div>
               <div>
                 <span className="text-[10px] text-[#757682] block uppercase tracking-wider font-bold">
@@ -389,9 +398,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
             </div>
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-lg bg-[#ffffff] text-[#131b2e] flex items-center justify-center shrink-0 shadow-xs border border-[#c5c5d3]/20">
-                <span className="material-symbols-outlined text-[20px]">
-                  transfer_within_a_station
-                </span>
+                <Users className="w-5 h-5 text-[#131b2e]" />
               </div>
               <div>
                 <span className="text-[10px] text-[#757682] block uppercase tracking-wider font-bold">
@@ -466,7 +473,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   fontWeight="700"
                   textAnchor="middle"
                 >
-                  12301 APPR
+                  {trainNo} APPR
                 </text>
 
                 {/* Preceding Train blocking PF 12 */}
@@ -568,9 +575,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
               onClick={() => setShowDrawer(!showDrawer)}
               className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#eaedff] text-[#131b2e] hover:bg-[#dce1ff] transition-colors text-xs font-bold order-2 sm:order-1 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[18px] text-[#757682]">
-                tune
-              </span>
+              <Activity className="w-4 h-4 text-[#757682]" />
               <span>
                 {showDrawer ? 'Hide Yard Diagnostics' : 'Inspect Yard Track Layout'}
               </span>
@@ -590,21 +595,15 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                   </>
                 ) : (
                   <>
-                    <span className="material-symbols-outlined text-[20px] transition-transform group-hover:scale-110">
-                      alt_route
-                    </span>
+                    <Route className="w-5 h-5 transition-transform group-hover:scale-110" />
                     <span>Confirm Reroute to Platform 16</span>
-                    <span className="material-symbols-outlined text-[18px]">
-                      arrow_forward
-                    </span>
+                    <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>
             ) : (
               <div className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-[#6cf8bb]/30 text-[#005236] border border-[#006c49]/30 text-sm font-bold order-1 sm:order-2">
-                <span className="material-symbols-outlined text-[#006c49] text-[20px]">
-                  check_circle
-                </span>
+                <CheckCircle className="w-5 h-5 text-[#006c49]" />
                 <span>Reroute Active • Route Locked to PF 16</span>
               </div>
             )}
@@ -616,9 +615,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
           <div className="p-5 rounded-2xl bg-[#e2e7ff] transition-all flex flex-col gap-3 animate-fadeIn border border-[#c5c5d3]/40">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#00236f] text-[20px]">
-                  schema
-                </span>
+                <Route className="w-5 h-5 text-[#00236f]" />
                 <span className="font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#131b2e]">
                   Yard Interlocking Sub-System Diagnostics
                 </span>
@@ -628,7 +625,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
                 onClick={() => setShowDrawer(false)}
                 className="w-7 h-7 rounded-lg bg-[#eaedff] text-[#131b2e] hover:bg-[#dae2fd] flex items-center justify-center cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[16px]">close</span>
+                <X className="w-4 h-4" />
               </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -656,7 +653,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl bg-[#ffffff] shadow-xs border border-[#c5c5d3]/30 flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#f2f3ff] flex items-center justify-center text-[#00236f]">
-              <span className="material-symbols-outlined text-[20px]">train</span>
+              <Train className="w-5 h-5 text-[#00236f]" />
             </div>
             <div>
               <span className="text-[10px] text-[#757682] uppercase block font-bold">
@@ -671,7 +668,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
 
           <div className="p-4 rounded-xl bg-[#ffffff] shadow-xs border border-[#c5c5d3]/30 flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#f2f3ff] flex items-center justify-center text-[#006c49]">
-              <span className="material-symbols-outlined text-[20px]">sensors</span>
+              <Radio className="w-5 h-5 text-[#006c49]" />
             </div>
             <div>
               <span className="text-[10px] text-[#757682] uppercase block font-bold">
@@ -686,7 +683,7 @@ export const Page4PlatformResolver: React.FC<Page4PlatformResolverProps> = ({
 
           <div className="p-4 rounded-xl bg-[#ffffff] shadow-xs border border-[#c5c5d3]/30 flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-[#f2f3ff] flex items-center justify-center text-[#131b2e]">
-              <span className="material-symbols-outlined text-[20px]">badge</span>
+              <ShieldCheck className="w-5 h-5 text-[#131b2e]" />
             </div>
             <div>
               <span className="text-[10px] text-[#757682] uppercase block font-bold">

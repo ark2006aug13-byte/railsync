@@ -6,16 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
-
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
-.pytest_cache/
 .coverage
-htmlcov/
-.venv/
-env/
-venv/
-frontend_backup.zip
+.pytest_cache/
 scratch/
+frontend_backup.zip

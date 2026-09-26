@@ -286,4 +286,17 @@ export const api = {
     }
     return [];
   },
+
+  /**
+   * Predict and Analyze ANY Train by Number or Name dynamically from backend ML models
+   */
+  async predictTrain(query: string): Promise<any> {
+    try {
+      const res = await fetch(`/api/train/predict?query=${encodeURIComponent(query)}`);
+      if (res.ok) return await res.json();
+    } catch (e) {
+      console.warn('API predictTrain fallback:', e);
+    }
+    return null;
+  },
 };

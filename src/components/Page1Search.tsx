@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { Search, ArrowRight, RefreshCw, AlertCircle } from 'lucide-react';
+import { api } from '../services/api';
 
 interface Page1SearchProps {
   currentTrain: string;
@@ -13,26 +15,40 @@ export const Page1Search: React.FC<Page1SearchProps> = ({
 }) => {
   const [query, setQuery] = useState(currentTrain || '12301 Howrah Rajdhani');
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const performSearch = async (targetQuery: string) => {
+    const q = targetQuery.trim();
+    if (!q) return;
+    setIsLoading(true);
+    setErrorMsg(null);
+
+    try {
+      const result = await api.predictTrain(q);
+      if (result && result.trainNo) {
+        onSelectTrain(`${result.trainNo} / ${result.trainName}`);
+        onNavigateToPage2();
+      } else {
+        onSelectTrain(q);
+        onNavigateToPage2();
+      }
+    } catch (e) {
+      console.warn('Search error:', e);
+      onSelectTrain(q);
+      onNavigateToPage2();
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
-    onSelectTrain(query);
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      onNavigateToPage2();
-    }, 750);
+    performSearch(query);
   };
 
   const handleChipClick = (trainName: string) => {
     setQuery(trainName);
-    onSelectTrain(trainName);
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      onNavigateToPage2();
-    }, 750);
+    performSearch(trainName);
   };
 
   return (
@@ -50,9 +66,7 @@ export const Page1Search: React.FC<Page1SearchProps> = ({
               <div className="absolute w-28 h-28 rounded-full bg-[#dce1ff]/40 animate-ping"></div>
               <div className="absolute w-20 h-20 rounded-full bg-[#6ffbbe]/40 animate-pulse"></div>
               <div className="relative z-10 w-16 h-16 rounded-2xl bg-[#00236f] flex items-center justify-center shadow-lg">
-                <span className="material-symbols-outlined text-white text-3xl animate-spin">
-                  sync
-                </span>
+                <RefreshCw className="w-8 h-8 text-white animate-spin" />
               </div>
             </div>
             <h3 className="font-['Plus_Jakarta_Sans'] text-xl text-[#131b2e] font-semibold mb-2 text-center">
@@ -101,14 +115,12 @@ export const Page1Search: React.FC<Page1SearchProps> = ({
                 className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
               >
                 <div className="flex items-center flex-1 px-3 py-2">
-                  <span className="material-symbols-outlined text-[#757682] text-2xl mr-3 select-none">
-                    search
-                  </span>
+                  <Search className="w-5 h-5 text-[#757682] mr-3 shrink-0" />
                   <input
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Enter Train Number or Name (e.g., 12301 or Rajdhani Express)..."
+                    placeholder="Enter Train Number or Name (e.g. 12301, 22436, 12367, Rajdhani)..."
                     className="w-full bg-transparent text-sm sm:text-base text-[#131b2e] placeholder:text-[#757682] focus:outline-none tracking-normal font-medium"
                   />
                 </div>
@@ -117,10 +129,17 @@ export const Page1Search: React.FC<Page1SearchProps> = ({
                   className="inline-flex items-center justify-center gap-2 bg-[#1e3a8a] hover:bg-[#00236f] text-white text-sm font-semibold px-6 py-3.5 rounded-xl shadow-md transition-all whitespace-nowrap active:scale-[0.98] cursor-pointer"
                 >
                   <span>Analyze Dynamic Arrival</span>
-                  <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                  <ArrowRight className="w-4 h-4 shrink-0" />
                 </button>
               </form>
             </div>
+
+            {errorMsg && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-[#ba1a1a] bg-[#ffdad6]/50 px-3 py-1.5 rounded-lg border border-[#ba1a1a]/20">
+                <AlertCircle className="w-4 h-4" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
 
             {/* Quick Suggestion Badges */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-4 max-w-2xl">
@@ -148,6 +167,14 @@ export const Page1Search: React.FC<Page1SearchProps> = ({
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-[#006c49]"></span>
                 22436 Vande Bharat
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChipClick('12367 Vikramshila')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#ffffff] border border-[#c5c5d3]/40 shadow-sm text-[#131b2e] hover:bg-[#e2e7ff] transition-all text-xs font-medium cursor-pointer"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#f59e0b]"></span>
+                12367 Vikramshila
               </button>
             </div>
 

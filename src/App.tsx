@@ -95,6 +95,7 @@ export default function App() {
 
         {currentPage === 'platform-resolver' && (
           <Page4PlatformResolver
+            trainName={currentTrain}
             isRerouted={isRerouted}
             onConfirmReroute={() => setIsRerouted(true)}
             onNavigateToPage2={() => navigateTo('live-arrival')}

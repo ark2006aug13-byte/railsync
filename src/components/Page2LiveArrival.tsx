@@ -1,4 +1,19 @@
 import React, { useState, useEffect } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Gauge,
+  MapPin,
+  Clock,
+  Activity,
+  TrendingDown,
+  AlertTriangle,
+  Zap,
+  CheckCircle,
+  Eye,
+  X,
+  Info,
+} from 'lucide-react';
 import { api, TrainStateResponse, EnhancedEtaResponse } from '../services/api';
 
 interface Page2LiveArrivalProps {
@@ -17,6 +32,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
   const [showModal, setShowModal] = useState(false);
   const [liveData, setLiveData] = useState<TrainStateResponse | null>(null);
   const [enhancedData, setEnhancedData] = useState<EnhancedEtaResponse | null>(null);
+  const [predictData, setPredictData] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Extract 5-digit train number
@@ -29,11 +45,13 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
 
     Promise.all([
       api.getTrainState(trainNo),
-      api.getEnhancedETA(trainNo)
-    ]).then(([state, eta]) => {
+      api.getEnhancedETA(trainNo),
+      api.predictTrain(trainNo),
+    ]).then(([state, eta, pred]) => {
       if (isMounted) {
         if (state) setLiveData(state);
         if (eta) setEnhancedData(eta);
+        if (pred) setPredictData(pred);
         setIsLoading(false);
       }
     });
@@ -42,6 +60,51 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
       isMounted = false;
     };
   }, [trainNo, isRerouted]);
+
+  // Derived values from backend
+  const displayTrainName = predictData?.trainName
+    ? `${predictData.trainNo} / ${predictData.trainName}`
+    : liveData?.train_name
+    ? `${liveData.train_no} / ${liveData.train_name}`
+    : trainName || '12301 / Howrah – New Delhi Rajdhani Express';
+
+  const currentSpeed = predictData?.currentSpeedKmph !== undefined
+    ? Math.round(predictData.currentSpeedKmph)
+    : liveData?.position
+    ? Math.round(liveData.position.speed_kmph)
+    : 118;
+
+  const currentSection = predictData?.currentSection
+    ? predictData.currentSection
+    : liveData?.position?.current_section
+    ? liveData.position.current_section
+    : 'Kanpur – Aligarh';
+
+  const destinationStation = predictData?.destinationEta?.stationName || 'New Delhi (NDLS)';
+  const scheduledTime = predictData?.destinationEta?.scheduledArrival
+    ? new Date(predictData.destinationEta.scheduledArrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '09:55 AM';
+
+  const dynamicEta = predictData?.destinationEta?.dynamicEta
+    ? new Date(predictData.destinationEta.dynamicEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : isRerouted
+    ? '10:06 AM'
+    : '10:15 AM';
+
+  const netDelayMin = predictData?.destinationEta?.netDelayMin !== undefined
+    ? Math.round(predictData.destinationEta.netDelayMin)
+    : isRerouted
+    ? 11
+    : 20;
+
+  const slackRecoveredMin = predictData?.destinationEta?.slackRecoveredMin !== undefined
+    ? Math.abs(predictData.destinationEta.slackRecoveredMin).toFixed(1)
+    : isRerouted
+    ? '19.7'
+    : '10.7';
+
+  const nextStop = liveData?.upcoming_stations?.[0]?.name || (trainNo === '12367' ? 'Anand Vihar Terminal' : 'Kanpur Central');
+  const nextStopEta = liveData?.upcoming_stations?.[0]?.eta_predicted_fmt || 'In 34 mins';
 
   return (
     <div className="w-full min-h-[calc(100vh-6.75rem)] flex flex-col animate-fadeIn">
@@ -53,9 +116,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
             onClick={onNavigateToPage1}
             className="inline-flex items-center gap-1.5 text-xs text-[#444651] hover:text-[#00236f] transition-all font-semibold group cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[18px] group-hover:-translate-x-0.5 transition-transform">
-              arrow_back
-            </span>
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
             <span>Search Another Train</span>
           </button>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#6ffbbe]/20 border border-[#006c49]/20 self-start sm:self-auto shadow-xs">
@@ -68,7 +129,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
             </span>
             <span className="text-[#c5c5d3] text-[11px]">•</span>
             <span className="text-[11px] text-[#444651] font-medium">
-              Section: {liveData?.position?.current_section || 'Kanpur – Aligarh'}
+              Section: {currentSection}
             </span>
           </div>
         </div>
@@ -81,10 +142,10 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
           <header className="space-y-2">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-[#1e3a8a] text-white text-[10px] tracking-wider uppercase font-bold">
-                {liveData?.train_name?.includes('Rajdhani') ? 'Priority Rajdhani' : 'Priority Superfast'}
+                {displayTrainName.includes('Rajdhani') ? 'Priority Rajdhani' : displayTrainName.includes('Vande') ? 'Priority Vande Bharat' : 'Priority Superfast'}
               </span>
               <span className="text-xs text-[#444651] font-medium">
-                {liveData?.active_section ? `${liveData.active_section.from_stn} ──► ${liveData.active_section.to_stn}` : 'Northern Zone Corridor'}
+                {liveData?.active_section ? `${liveData.active_section.from_stn} ──► ${liveData.active_section.to_stn}` : 'Northern Zone Mainline'}
               </span>
               {isRerouted && (
                 <span className="px-2 py-0.5 rounded-full bg-[#6ffbbe]/30 text-[#006c49] text-[10px] font-bold border border-[#006c49]/30">
@@ -93,33 +154,25 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               )}
             </div>
             <h1 className="font-['Plus_Jakarta_Sans'] text-2xl sm:text-3xl md:text-4xl text-[#131b2e] font-extrabold tracking-tight">
-              {liveData?.train_name ? `${liveData.train_no} / ${liveData.train_name}` : (trainName || '12301 / Howrah – New Delhi Rajdhani Express')}
+              {displayTrainName}
             </h1>
             {/* Telemetry Ribbon */}
             <div className="flex flex-wrap items-center gap-y-2 gap-x-3 pt-1">
               <div className="inline-flex items-center gap-1.5 text-xs text-[#444651] bg-[#f2f3ff] px-2.5 py-1 rounded-md border border-[#c5c5d3]/30">
-                <span className="material-symbols-outlined text-[#00236f] text-[16px]">
-                  speed
-                </span>
+                <Gauge className="w-4 h-4 text-[#00236f]" />
                 <span>
                   Current Speed:{' '}
-                  <strong className="text-[#131b2e] font-bold">
-                    {liveData?.position ? Math.round(liveData.position.speed_kmph) : 118} km/h
-                  </strong>
+                  <strong className="text-[#131b2e] font-bold">{currentSpeed} km/h</strong>
                 </span>
               </div>
               <div className="inline-flex items-center gap-1.5 text-xs text-[#444651] bg-[#f2f3ff] px-2.5 py-1 rounded-md border border-[#c5c5d3]/30">
-                <span className="material-symbols-outlined text-[#006c49] text-[16px]">
-                  location_on
-                </span>
+                <MapPin className="w-4 h-4 text-[#006c49]" />
                 <span>
                   Next Immediate Stop:{' '}
-                  <strong className="text-[#131b2e] font-bold">
-                    {liveData?.upcoming_stations?.[0]?.name || 'Kanpur Central'}
-                  </strong>
+                  <strong className="text-[#131b2e] font-bold">{nextStop}</strong>
                 </span>
                 <span className="px-1.5 py-0.2 rounded bg-[#e2e7ff] text-[#131b2e] text-[10px] font-bold">
-                  {liveData?.upcoming_stations?.[0]?.eta_predicted_fmt || 'In 34 mins'}
+                  {nextStopEta}
                 </span>
               </div>
             </div>
@@ -134,27 +187,27 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               {/* Card Top Bar */}
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="inline-flex items-center gap-1.5 text-[#444651]">
-                  <span className="material-symbols-outlined text-[#00236f] text-[18px]">
-                    insights
-                  </span>
+                  <Activity className="w-4 h-4 text-[#00236f]" />
                   <span className="text-[11px] uppercase tracking-wider font-bold text-[#757682]">
-                    Dynamic Destination Arrival (New Delhi - NDLS)
+                    Dynamic Destination Arrival ({destinationStation})
                   </span>
                 </div>
                 {/* Confidence Badge */}
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#6ffbbe]/30 text-[#005236] border border-[#006c49]/20">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#006c49]"></span>
-                  <span className="text-[11px] font-bold">94% Neural Confidence</span>
+                  <span className="text-[11px] font-bold">
+                    {predictData?.destinationEta?.confidence?.confidencePercentage || 94}% Neural Confidence
+                  </span>
                 </div>
               </div>
 
               {/* Interval Main Visual */}
               <div className="pt-1 space-y-1">
                 <div className="font-['Plus_Jakarta_Sans'] text-3xl sm:text-4xl text-[#00236f] font-extrabold tracking-tight tabular-nums">
-                  {isRerouted ? '10:04 AM – 10:08 AM' : '10:12 AM – 10:18 AM'}
+                  {dynamicEta}
                 </div>
                 <p className="text-xs sm:text-sm text-[#444651]">
-                  Dynamic predictive window calculated via sensor telemetry and section occupancy.
+                  Dynamic predictive arrival calculated via sensor telemetry, track speeds, and slack recovery.
                 </p>
               </div>
 
@@ -162,16 +215,14 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               <div className="p-4 bg-[#f2f3ff] rounded-xl flex flex-wrap items-center justify-between gap-4 border border-[#c5c5d3]/20">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-lg bg-[#eaedff] flex items-center justify-center text-[#00236f]">
-                    <span className="material-symbols-outlined text-[22px]">
-                      schedule
-                    </span>
+                    <Clock className="w-5 h-5 text-[#00236f]" />
                   </div>
                   <div>
                     <span className="text-[10px] text-[#444651] uppercase tracking-wider font-bold block">
                       Expected Dynamic ETA
                     </span>
                     <span className="font-['Plus_Jakarta_Sans'] text-lg text-[#131b2e] font-bold tabular-nums">
-                      {isRerouted ? '10:06 AM' : '10:15 AM'}
+                      {dynamicEta}
                     </span>
                   </div>
                 </div>
@@ -182,21 +233,19 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                       Scheduled
                     </span>
                     <span className="font-['Plus_Jakarta_Sans'] text-lg text-[#757682] line-through tabular-nums font-semibold">
-                      09:55 AM
+                      {scheduledTime}
                     </span>
                   </div>
                   {/* Net Delay Pill */}
                   <span
                     className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold ${
-                      isRerouted
+                      netDelayMin <= 0
                         ? 'bg-[#6ffbbe]/40 text-[#006c49]'
-                        : 'bg-[#6ffbbe]/40 text-[#006c49]'
+                        : 'bg-[#ffdad6] text-[#ba1a1a]'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-[16px]">
-                      trending_down
-                    </span>
-                    Net Delay: {isRerouted ? '+11 mins (Recovered 9m)' : '+20 mins'}
+                    <TrendingDown className="w-4 h-4" />
+                    Net Delay: {netDelayMin > 0 ? `+${netDelayMin} mins` : `${netDelayMin} mins (On-Time)`}
                   </span>
                 </div>
               </div>
@@ -204,14 +253,16 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               {/* Interactive Micro-Timeline */}
               <div className="pt-2">
                 <div className="flex items-center justify-between text-[11px] text-[#757682] pb-1.5 font-medium">
-                  <span>Origin: Howrah Jn (HWH)</span>
-                  <span className="font-semibold text-[#131b2e]">78% Route Complete</span>
-                  <span>Terminus: New Delhi (NDLS)</span>
+                  <span>Origin: Howrah / Delhi Source</span>
+                  <span className="font-semibold text-[#131b2e]">
+                    {liveData?.position?.km ? Math.min(100, Math.max(10, Math.round((liveData.position.km / 1449) * 100))) : 78}% Route Complete
+                  </span>
+                  <span>Terminus: {destinationStation}</span>
                 </div>
                 <div className="w-full bg-[#eaedff] h-2 rounded-full overflow-hidden flex">
                   <div
                     className="bg-[#00236f] h-full rounded-full transition-all duration-1000 ease-out"
-                    style={{ width: '78%' }}
+                    style={{ width: `${liveData?.position?.km ? Math.min(100, Math.max(10, Math.round((liveData.position.km / 1449) * 100))) : 78}%` }}
                   ></div>
                 </div>
               </div>
@@ -227,9 +278,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <span className="text-[11px] uppercase tracking-wider text-[#757682] font-bold">
                     Total Delays Incurred
                   </span>
-                  <span className="material-symbols-outlined text-[#f39461] text-[20px]">
-                    warning
-                  </span>
+                  <AlertTriangle className="w-5 h-5 text-[#f39461]" />
                 </div>
                 <div className="font-['Plus_Jakarta_Sans'] text-2xl text-[#f39461] font-bold tabular-nums">
                   {isRerouted ? '+21.7 mins' : '+30.7 mins'}
@@ -237,13 +286,11 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               </div>
               <div className="pt-3 mt-2 border-t border-[#c5c5d3]/20">
                 <p className="text-xs text-[#444651] flex items-start gap-1.5 leading-relaxed">
-                  <span className="material-symbols-outlined text-[15px] text-[#757682] mt-0.5 shrink-0">
-                    info
-                  </span>
+                  <Info className="w-4 h-4 text-[#757682] mt-0.5 shrink-0" />
                   <span>
                     {isRerouted
-                      ? 'Fog speed restriction in Mughalsarai belt. Platform outer hold avoided.'
-                      : 'Fog speed restriction in Mughalsarai belt & outer platform hold at Prayagraj.'}
+                      ? 'Fog speed restriction in northern belt. Platform outer hold avoided.'
+                      : 'Fog speed restriction in northern belt & outer platform hold before terminus.'}
                   </span>
                 </p>
               </div>
@@ -256,23 +303,17 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <span className="text-[11px] uppercase tracking-wider text-[#757682] font-bold">
                     Time Deleted / Recovered
                   </span>
-                  <span className="material-symbols-outlined text-[#006c49] text-[20px]">
-                    bolt
-                  </span>
+                  <Zap className="w-5 h-5 text-[#006c49]" />
                 </div>
                 <div className="font-['Plus_Jakarta_Sans'] text-2xl text-[#006c49] font-bold tabular-nums">
-                  {isRerouted ? '-19.7 mins' : '-10.7 mins'}
+                  -{slackRecoveredMin} mins
                 </div>
               </div>
               <div className="pt-3 mt-2 border-t border-[#c5c5d3]/20">
                 <p className="text-xs text-[#444651] flex items-start gap-1.5 leading-relaxed">
-                  <span className="material-symbols-outlined text-[15px] text-[#006c49] mt-0.5 shrink-0">
-                    check_circle
-                  </span>
+                  <CheckCircle className="w-4 h-4 text-[#006c49] mt-0.5 shrink-0" />
                   <span>
-                    {isRerouted
-                      ? '130 km/h sustained run + Crossover 42B PF 16 instant berthing.'
-                      : '130 km/h sustained line run on clear Grand Chord track corridor.'}
+                    130 km/h sustained line run on cleared track corridor with timetable slack buffer.
                   </span>
                 </p>
               </div>
@@ -287,9 +328,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               className="flex-1 bg-[#1e3a8a] text-white hover:bg-[#00236f] py-3.5 px-6 rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 group active:scale-[0.99] cursor-pointer"
             >
               <span>Inspect Delay Causes &amp; Recovery Breakdown</span>
-              <span className="material-symbols-outlined text-[20px] group-hover:translate-x-1 transition-transform">
-                arrow_forward
-              </span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
             <button
               type="button"
@@ -297,9 +336,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               className="px-4 py-3.5 rounded-xl bg-[#ffffff] border border-[#c5c5d3]/40 text-[#131b2e] hover:bg-[#eaedff] text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               title="Quick preview summary"
             >
-              <span className="material-symbols-outlined text-[18px] text-[#1e3a8a]">
-                visibility
-              </span>
+              <Eye className="w-4 h-4 text-[#1e3a8a]" />
               <span>Quick Preview</span>
             </button>
           </div>
@@ -326,7 +363,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-[#dce1ff] flex items-center justify-center text-[#00236f]">
-                  <span className="material-symbols-outlined text-[18px]">analytics</span>
+                  <Activity className="w-4 h-4 text-[#00236f]" />
                 </div>
                 <h3 className="font-['Plus_Jakarta_Sans'] text-base font-bold text-[#131b2e]">
                   Breakdown Intelligence
@@ -337,7 +374,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                 onClick={() => setShowModal(false)}
                 className="w-8 h-8 rounded-full hover:bg-[#f2f3ff] flex items-center justify-center text-[#444651] transition-colors cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[20px]">close</span>
+                <X className="w-5 h-5" />
               </button>
             </div>
 
@@ -345,9 +382,9 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
               <div className="p-3 bg-[#f2f3ff] rounded-xl flex justify-between items-center">
                 <div className="space-y-0.5">
                   <div className="text-xs font-semibold text-[#131b2e]">
-                    Section Fog &amp; Visibility
+                    Section Fog &amp; Visibility Impact
                   </div>
-                  <div className="text-[11px] text-[#757682]">Gaya – Sasaram Sector</div>
+                  <div className="text-[11px] text-[#757682]">Northern Indo-Gangetic Belt</div>
                 </div>
                 <span className="text-xs font-bold text-[#f39461]">+18.5m</span>
               </div>
@@ -356,7 +393,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <div className="text-xs font-semibold text-[#131b2e]">
                     Platform Clearance Hold
                   </div>
-                  <div className="text-[11px] text-[#757682]">Prayagraj Jn Junction</div>
+                  <div className="text-[11px] text-[#757682]">Outer Home Signal Interlocking</div>
                 </div>
                 <span className="text-xs font-bold text-[#f39461]">+12.2m</span>
               </div>
@@ -365,9 +402,9 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                   <div className="text-xs font-semibold text-[#006c49]">
                     High-Speed Acceleration Corridor
                   </div>
-                  <div className="text-[11px] text-[#005236]">Kanpur bypass automated clearance</div>
+                  <div className="text-[11px] text-[#005236]">130 km/h line speed clearance</div>
                 </div>
-                <span className="text-xs font-bold text-[#006c49]">-10.7m</span>
+                <span className="text-xs font-bold text-[#006c49]">-{slackRecoveredMin}m</span>
               </div>
             </div>
 
@@ -388,7 +425,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                 className="px-4 py-2 rounded-lg bg-[#1e3a8a] text-white hover:bg-[#00236f] text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <span>Full Corridor Report</span>
-                <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>

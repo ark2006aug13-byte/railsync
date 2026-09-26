@@ -1,4 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Activity,
+  AlertTriangle,
+  Zap,
+  CloudFog,
+  Route,
+  CheckCircle,
+  GitBranch,
+  Clock,
+  Gauge,
+  Info,
+} from 'lucide-react';
 import { api, EnhancedEtaResponse, TrainStateResponse } from '../services/api';
 
 interface Page3DiagnosticsProps {
@@ -16,6 +30,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
 }) => {
   const [enhancedData, setEnhancedData] = useState<EnhancedEtaResponse | null>(null);
   const [liveData, setLiveData] = useState<TrainStateResponse | null>(null);
+  const [predictData, setPredictData] = useState<any | null>(null);
 
   const trainNoMatch = trainName.match(/\b\d{5}\b/);
   const trainNo = trainNoMatch ? trainNoMatch[0] : '12301';
@@ -24,17 +39,52 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
     let isMounted = true;
     Promise.all([
       api.getEnhancedETA(trainNo),
-      api.getTrainState(trainNo)
-    ]).then(([eta, state]) => {
+      api.getTrainState(trainNo),
+      api.predictTrain(trainNo),
+    ]).then(([eta, state, pred]) => {
       if (isMounted) {
         if (eta) setEnhancedData(eta);
         if (state) setLiveData(state);
+        if (pred) setPredictData(pred);
       }
     });
     return () => {
       isMounted = false;
     };
   }, [trainNo, isRerouted]);
+
+  // Derived display strings
+  const displayName = predictData?.trainName
+    ? `${predictData.trainNo} / ${predictData.trainName}`
+    : liveData?.train_name
+    ? `${liveData.train_no} / ${liveData.train_name}`
+    : trainName || '12301 / Howrah – New Delhi Rajdhani Express';
+
+  const scheduledTime = predictData?.destinationEta?.scheduledArrival
+    ? new Date(predictData.destinationEta.scheduledArrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '09:55 AM';
+
+  const dynamicEta = predictData?.destinationEta?.dynamicEta
+    ? new Date(predictData.destinationEta.dynamicEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : isRerouted
+    ? '10:06 AM'
+    : '10:15 AM';
+
+  const totalDelays = isRerouted ? '+21.7' : '+30.7';
+  const totalRecovered = predictData?.destinationEta?.slackRecoveredMin !== undefined
+    ? Math.abs(predictData.destinationEta.slackRecoveredMin).toFixed(1)
+    : isRerouted
+    ? '19.7'
+    : '10.7';
+
+  const netDelay = predictData?.destinationEta?.netDelayMin !== undefined
+    ? Math.round(predictData.destinationEta.netDelayMin)
+    : isRerouted
+    ? 11
+    : 20;
+
+  const destinationStation = predictData?.destinationEta?.stationName || 'New Delhi (NDLS)';
+
   return (
     <div className="w-full min-h-[calc(100vh-6.75rem)] px-4 sm:px-8 py-6 md:py-10 animate-fadeIn">
       <div className="w-full max-w-[940px] mx-auto flex flex-col gap-6">
@@ -46,17 +96,10 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
               onClick={onNavigateToPage2}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ffffff] text-[#131b2e] hover:bg-[#eaedff] transition-all shadow-xs border border-[#c5c5d3]/30 text-xs font-semibold group cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[#757682] group-hover:text-[#00236f] transition-colors text-[18px]">
-                arrow_back
-              </span>
+              <ArrowLeft className="w-4 h-4 text-[#757682] group-hover:text-[#00236f] transition-colors" />
               <span>Back to Live Arrival</span>
             </button>
             <div className="hidden sm:flex items-center gap-2 pl-2">
-              <img
-                alt="RailSync"
-                className="w-5 h-5 object-contain rounded-md"
-                src="https://lh3.googleusercontent.com/aida/AEtjO1XmmDFX5aZk67_N3wkNzJfLPrmY_WTQAs1faj0sYyNlcvaWWkk97qZD7KHXCosWuhvaxWxq6mT76UKtktIHG3XxaU5p3mYCnA0YkBZavUk0Dm781ndBGVEiTBeBdKcfZjNS_Z5SwsQdDTxKNlauyw3MsZ_1IkYDY2XkTb0VZGhxJyq8bV2Y1mQjllx9_ktoXRgxZRf7Tp1bA1iKTYHkgH7aWov2bCjkNUBmSILUebTfU51-NYA7yvU8rxc"
-              />
               <span className="font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#00236f]">
                 RailSync
               </span>
@@ -70,24 +113,26 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-[#006c49]"></span>
             </span>
             <span className="text-[11px] text-[#006c49] font-bold">
-              Telemetry Synced (0.8s)
+              Telemetry Synced Live
             </span>
             <span className="text-[#c5c5d3]">•</span>
-            <span className="text-[11px] text-[#444651] font-medium">Block KM 1014.2</span>
+            <span className="text-[11px] text-[#444651] font-medium">
+              Block KM {liveData?.position ? Math.round(liveData.position.km) : 1014.2}
+            </span>
           </div>
         </div>
 
         {/* 2. Header & Decomposition Meta */}
         <div className="flex flex-col gap-2">
           <div className="inline-flex items-center gap-1.5 self-start px-3 py-1 rounded-full bg-[#dce1ff] text-[#00236f] border border-[#1e3a8a]/20">
-            <span className="material-symbols-outlined text-[15px]">analytics</span>
+            <Activity className="w-4 h-4 text-[#00236f]" />
             <span className="text-[10px] tracking-wider uppercase font-bold">
-              TRAIN 12301 TELEMETRY DECOMPOSITION
+              TRAIN {trainNo} TELEMETRY DECOMPOSITION
             </span>
           </div>
           <h1 className="font-['Plus_Jakarta_Sans'] text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#131b2e] tracking-tight">
-            How Train 12301’s ETA Was Calculated{' '}
-            <span className="text-[#444651] font-normal">(NDLS Arrival)</span>
+            How {displayName}’s ETA Was Calculated{' '}
+            <span className="text-[#444651] font-normal">({destinationStation})</span>
           </h1>
           <p className="text-sm sm:text-base text-[#444651] max-w-2xl leading-relaxed">
             Dynamic neural breakdown explaining live signal caution vectors, terminal clearance constraints, and continuous line-speed velocity recovery offsets.
@@ -103,9 +148,9 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </span>
                 <div className="flex items-baseline gap-1">
                   <span className="font-['Plus_Jakarta_Sans'] text-2xl font-bold text-[#131b2e]">
-                    09:55
+                    {scheduledTime.split(' ')[0]}
                   </span>
-                  <span className="text-xs font-semibold text-[#444651]">AM</span>
+                  <span className="text-xs font-semibold text-[#444651]">{scheduledTime.split(' ')[1] || 'AM'}</span>
                 </div>
                 <span className="text-[11px] text-[#757682]">Timetable Baseline</span>
               </div>
@@ -117,7 +162,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </span>
                 <div className="flex items-baseline gap-1">
                   <span className="font-['Plus_Jakarta_Sans'] text-2xl font-bold text-[#773205]">
-                    {isRerouted ? '+21.7' : '+30.7'}
+                    {totalDelays}
                   </span>
                   <span className="text-xs font-semibold text-[#773205]">min</span>
                 </div>
@@ -133,12 +178,12 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </span>
                 <div className="flex items-baseline gap-1">
                   <span className="font-['Plus_Jakarta_Sans'] text-2xl font-bold text-[#006c49]">
-                    {isRerouted ? '-19.7' : '-10.7'}
+                    -{totalRecovered}
                   </span>
                   <span className="text-xs font-semibold text-[#006c49]">min</span>
                 </div>
                 <span className="text-[11px] text-[#006c49] font-medium">
-                  {isRerouted ? 'Corridor + PF 16' : 'High-speed corridor'}
+                  {isRerouted ? 'Corridor + PF 16' : '130 km/h Corridor'}
                 </span>
               </div>
 
@@ -155,12 +200,12 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="font-['Plus_Jakarta_Sans'] text-2xl font-bold text-[#00236f]">
-                    {isRerouted ? '10:06' : '10:15'}
+                    {dynamicEta.split(' ')[0]}
                   </span>
-                  <span className="text-xs font-bold text-[#00236f]">AM</span>
+                  <span className="text-xs font-bold text-[#00236f]">{dynamicEta.split(' ')[1] || 'AM'}</span>
                 </div>
                 <span className="text-[11px] text-[#444651] font-semibold">
-                  {isRerouted ? 'Delayed by 11.0 mins' : 'Delayed by 20.0 mins'}
+                  {netDelay > 0 ? `Delayed by ${netDelay} mins` : `${netDelay} mins (On-Time)`}
                 </span>
               </div>
             </div>
@@ -175,7 +220,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
             <div className="flex items-center justify-between pb-1 border-b border-[#c5c5d3]/20">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#ffdbcb] flex items-center justify-center text-[#773205]">
-                  <span className="material-symbols-outlined text-[18px]">warning</span>
+                  <AlertTriangle className="w-4 h-4 text-[#773205]" />
                 </div>
                 <div>
                   <h2 className="font-['Plus_Jakarta_Sans'] text-sm sm:text-base font-bold text-[#131b2e]">
@@ -185,7 +230,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </div>
               </div>
               <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#ffdbcb] text-[#773205]">
-                {isRerouted ? '+21.7 mins' : '+30.7 mins'}
+                {totalDelays} mins
               </span>
             </div>
 
@@ -200,14 +245,12 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-[#444651]">
-                  Speed clamped to 60 km/h across Gangetic Plain automatic block sections (KM 620–680).
+                  Speed clamped across Gangetic Plain automatic block sections during low visibility.
                 </p>
                 <div className="flex items-center gap-1.5 pt-1">
-                  <span className="material-symbols-outlined text-[14px] text-[#757682]">
-                    foggy
-                  </span>
+                  <CloudFog className="w-3.5 h-3.5 text-[#757682]" />
                   <span className="text-[11px] text-[#757682]">
-                    Visibility &lt; 250m • Section CNB-TDL
+                    Visibility &lt; 250m • Automatic Signal Clamp
                   </span>
                 </div>
               </div>
@@ -223,12 +266,10 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-[#444651]">
-                  Double yellow aspect observed trailing Train 12876 (Neelachal Exp, headway margin 7.4 km).
+                  Double yellow aspect observed trailing leading train (headway margin safe at 7.4 km).
                 </p>
                 <div className="flex items-center gap-1.5 pt-1">
-                  <span className="material-symbols-outlined text-[14px] text-[#757682]">
-                    traffic
-                  </span>
+                  <Route className="w-3.5 h-3.5 text-[#757682]" />
                   <span className="text-[11px] text-[#757682]">
                     Inter-train spacing governed by automatic block
                   </span>
@@ -245,16 +286,14 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <span
-                      className={`material-symbols-outlined text-[18px] ${
-                        isRerouted ? 'text-[#006c49]' : 'text-[#773205]'
-                      }`}
-                    >
-                      {isRerouted ? 'check_circle' : 'error'}
-                    </span>
+                    {isRerouted ? (
+                      <CheckCircle className="w-4 h-4 text-[#006c49]" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-[#773205]" />
+                    )}
                     <span className="text-xs font-bold text-[#131b2e]">
                       {isRerouted
-                        ? 'Platform 12 Outer Hold (Resolved via PF 16)'
+                        ? 'Platform Outer Hold (Resolved via PF 16)'
                         : 'Platform 12 Outer Hold'}
                     </span>
                   </div>
@@ -270,8 +309,8 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </div>
                 <p className="text-xs text-[#131b2e] font-medium leading-relaxed">
                   {isRerouted
-                    ? 'Point 42B reversed. Train 12301 admitted straight to empty Platform 16 without halt.'
-                    : 'Train 12876 currently occupying Platform 12 at New Delhi. Train held at Yamuna Bridge outer.'}
+                    ? 'Point 42B reversed. Train admitted straight to empty Platform 16 without halt.'
+                    : 'Preceding train occupying platform. Train held at Yamuna Bridge outer.'}
                 </p>
                 <div className="flex items-center justify-between pt-1">
                   <span
@@ -290,29 +329,6 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                   </button>
                 </div>
               </div>
-
-              {/* Item 4 */}
-              <div className="p-3.5 rounded-xl bg-[#f2f3ff]/70 hover:bg-[#f2f3ff] transition-colors flex flex-col gap-1 border border-[#c5c5d3]/20">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#131b2e]">
-                    Junction Throat Restriction
-                  </span>
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#ffdbcb] text-[#773205]">
-                    +11.0 mins
-                  </span>
-                </div>
-                <p className="text-xs text-[#444651]">
-                  Mandatory 25 km/h terminal diamond turnout speed limit on NDLS southern approaches.
-                </p>
-                <div className="flex items-center gap-1.5 pt-1">
-                  <span className="material-symbols-outlined text-[14px] text-[#757682]">
-                    alt_route
-                  </span>
-                  <span className="text-[11px] text-[#757682]">
-                    Turnout speed regulation permanent constraint
-                  </span>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -322,7 +338,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
             <div className="flex items-center justify-between pb-1 border-b border-[#c5c5d3]/20">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#6ffbbe]/40 flex items-center justify-center text-[#006c49]">
-                  <span className="material-symbols-outlined text-[18px]">bolt</span>
+                  <Zap className="w-4 h-4 text-[#006c49]" />
                 </div>
                 <div>
                   <h2 className="font-['Plus_Jakarta_Sans'] text-sm sm:text-base font-bold text-[#131b2e]">
@@ -332,7 +348,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 </div>
               </div>
               <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#6ffbbe]/40 text-[#006c49]">
-                {isRerouted ? '-19.7 mins' : '-10.7 mins'}
+                -{totalRecovered} mins
               </span>
             </div>
 
@@ -345,61 +361,19 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                     130 km/h Clear Track Sprint
                   </span>
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#6ffbbe]/40 text-[#006c49]">
-                    -7.5 mins
+                    -{totalRecovered} mins
                   </span>
                 </div>
                 <p className="text-xs text-[#444651]">
-                  WAP-7 dual-cab locomotive exploited high-density green corridor between Kanpur (CNB) and Aligarh (ALJN).
+                  High-horsepower electric locomotive exploited cleared track section at line speed.
                 </p>
                 <div className="flex items-center gap-1.5 pt-1">
-                  <span className="material-symbols-outlined text-[14px] text-[#006c49]">
-                    speed
-                  </span>
+                  <Gauge className="w-3.5 h-3.5 text-[#006c49]" />
                   <span className="text-[11px] text-[#006c49] font-medium">
-                    Sustained MPS 130 km/h for 142 km stretch
+                    Sustained MPS line running across trunk corridor
                   </span>
                 </div>
               </div>
-
-              {/* Item 2 */}
-              <div className="p-3.5 rounded-xl bg-[#f2f3ff]/70 hover:bg-[#f2f3ff] transition-colors flex flex-col gap-1 border border-[#c5c5d3]/20">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#131b2e]">
-                    Priority Looping Advantage
-                  </span>
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#6ffbbe]/40 text-[#006c49]">
-                    -3.2 mins
-                  </span>
-                </div>
-                <p className="text-xs text-[#444651]">
-                  Freight rake #8841 looped at Khurja loop siding, providing Train 12301 uninterrupted green aspects.
-                </p>
-                <div className="flex items-center gap-1.5 pt-1">
-                  <span className="material-symbols-outlined text-[14px] text-[#006c49]">
-                    low_priority
-                  </span>
-                  <span className="text-[11px] text-[#006c49] font-medium">
-                    Dispatched without stopping on main line
-                  </span>
-                </div>
-              </div>
-
-              {/* Extra Reroute bonus item if rerouted */}
-              {isRerouted && (
-                <div className="p-3.5 rounded-xl bg-[#6ffbbe]/25 transition-colors flex flex-col gap-1 border border-[#006c49]/30 animate-fadeIn">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#006c49]">
-                      Platform 16 Diversion Clearance
-                    </span>
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#6ffbbe] text-[#005236]">
-                      -9.0 mins
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#005236]">
-                    Avoided Yamuna signal danger halt completely by diverting via Switch 42B to Platform 16.
-                  </p>
-                </div>
-              )}
 
               {/* Visual Corridor Efficiency Graph / Gauge */}
               <div className="p-3.5 rounded-xl bg-[#f2f3ff] flex flex-col gap-2 border border-[#c5c5d3]/20">
@@ -426,11 +400,9 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
 
               {/* Neural Model Note */}
               <div className="p-2.5 rounded-lg bg-[#ffffff] border border-[#c5c5d3]/30 flex items-start gap-2 text-[#444651]">
-                <span className="material-symbols-outlined text-[16px] text-[#00236f] mt-0.5">
-                  neurology
-                </span>
+                <Activity className="w-4 h-4 text-[#00236f] mt-0.5 shrink-0" />
                 <span className="text-xs leading-relaxed">
-                  Calculated using RailSync Neural Engine v4.2 with 3-year historical corridor velocity patterns.
+                  Calculated using RailSync Neural Engine v4.2 with historical corridor velocity patterns.
                 </span>
               </div>
             </div>
@@ -454,7 +426,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 Baseline
               </span>
               <span className="font-['Plus_Jakarta_Sans'] text-xl sm:text-2xl font-bold text-[#131b2e]">
-                09:55 AM
+                {scheduledTime.split(' ')[0]}
               </span>
               <span className="text-xs text-[#444651] block font-medium">Schedule</span>
             </div>
@@ -470,10 +442,10 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 Delays
               </span>
               <span className="font-['Plus_Jakarta_Sans'] text-xl sm:text-2xl font-bold text-[#773205]">
-                {isRerouted ? '+21.7 m' : '+30.7 m'}
+                {totalDelays} m
               </span>
               <span className="text-xs text-[#773205] block font-medium">
-                {isRerouted ? '3 Injections' : '4 Injections'}
+                Incurred
               </span>
             </div>
 
@@ -488,7 +460,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 Recovered
               </span>
               <span className="font-['Plus_Jakarta_Sans'] text-xl sm:text-2xl font-bold text-[#006c49]">
-                {isRerouted ? '-19.7 m' : '-10.7 m'}
+                -{totalRecovered} m
               </span>
               <span className="text-xs text-[#006c49] block font-medium">
                 Velocity Gain
@@ -506,21 +478,19 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
                 Dynamic ETA
               </span>
               <span className="font-['Plus_Jakarta_Sans'] text-xl sm:text-2xl font-bold text-white">
-                {isRerouted ? '10:06 AM' : '10:15 AM'}
+                {dynamicEta}
               </span>
               <span className="text-xs text-[#dce1ff] block font-medium">
-                {isRerouted ? '+11.0m Net Delay' : '+20.0m Net Delay'}
+                {netDelay > 0 ? `+${netDelay}m Net Delay` : `${netDelay}m (On-Time)`}
               </span>
             </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-between text-[#757682] text-[11px] pt-1 gap-2 border-t border-[#c5c5d3]/20">
             <div className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[16px] text-[#006c49]">
-                check_circle
-              </span>
+              <CheckCircle className="w-4 h-4 text-[#006c49]" />
               <span>
-                Verified against live automatic block section track circuits between CNB and NDLS.
+                Verified against live automatic block section track circuits.
               </span>
             </div>
             <span className="text-[#444651] font-semibold">Refreshed: Live Precision</span>
@@ -531,21 +501,21 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
         <div className="w-full bg-[#ffffff] rounded-2xl p-5 sm:p-6 shadow-sm border border-[#c5c5d3]/30 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-start gap-3.5 max-w-xl">
             <div className="w-10 h-10 rounded-xl bg-[#ffdbcb] shrink-0 flex items-center justify-center text-[#773205]">
-              <span className="material-symbols-outlined text-[24px]">call_split</span>
+              <GitBranch className="w-6 h-6 text-[#773205]" />
             </div>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <span className="font-['Plus_Jakarta_Sans'] text-base font-bold text-[#131b2e]">
-                  Platform 12 Conflict Detected
+                  Platform Conflict Mitigation
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-[#ffdbcb] text-[#773205] font-bold uppercase">
                   Actionable
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-[#444651] leading-relaxed">
-                Platform 12 conflict is causing{' '}
+                Platform conflict can cause{' '}
                 <strong className="text-[#773205] font-bold">+9.0m unnecessary outer hold</strong>.
-                Diverting Train 12301 to vacant Platform 16 will recover 9 minutes instantly.
+                Diverting rake to vacant Platform 16 recovers 9 minutes instantly.
               </p>
             </div>
           </div>
@@ -557,9 +527,7 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
               className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#00236f] hover:bg-[#1e3a8a] text-white text-xs sm:text-sm font-bold transition-all shadow-md group cursor-pointer"
             >
               <span>Open Station Platform Resolver</span>
-              <span className="material-symbols-outlined text-[18px] group-hover:translate-x-1 transition-transform">
-                arrow_forward
-              </span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { User } from 'lucide-react';
 import { PageId } from '../types';
 
 interface HeaderProps {
@@ -89,7 +90,7 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate }) => {
             className="w-8 h-8 rounded-full bg-[#00236f] flex items-center justify-center text-white shadow-sm cursor-pointer select-none hover:opacity-90"
             title="Dispatch Operator"
           >
-            <span className="material-symbols-outlined text-[18px]">person</span>
+            <User className="w-4 h-4 text-white" />
           </div>
         </div>
       </div>
