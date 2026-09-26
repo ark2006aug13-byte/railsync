@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import L from 'leaflet';
 import { 
   Search, 
   Zap, 
@@ -14,9 +15,11 @@ import {
   Train,
   Sliders,
   ShieldCheck,
-  ChevronRight
+  ChevronRight,
+  Radar
 } from 'lucide-react';
 import { AppView } from '../../types';
+import { RADAR_INITIAL_TRAINS } from '../../data/radarMockData';
 
 interface HomeScreenProps {
   onNavigate: (view: AppView) => void;
@@ -26,6 +29,60 @@ interface HomeScreenProps {
 export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onSelectTrain }) => {
   const [searchQuery, setSearchQuery] = useState('12302 Kolkata Rajdhani');
   const [activeSearchTab, setActiveSearchTab] = useState<'train' | 'station'>('train');
+  const homeMapRef = useRef<HTMLDivElement>(null);
+  const homeMapInstanceRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!homeMapRef.current || homeMapInstanceRef.current) return;
+
+    const map = L.map(homeMapRef.current, {
+      center: [23.2, 80.5],
+      zoom: 4.8,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: true,
+      scrollWheelZoom: false
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 18
+    }).addTo(map);
+
+    RADAR_INITIAL_TRAINS.forEach(train => {
+      let color = train.type === 'Vande Bharat' ? '#a855f7' : train.type === 'Rajdhani' ? '#38bdf8' : '#10b981';
+      
+      const customIcon = L.divIcon({
+        html: `
+          <div style="width: 26px; height: 26px; border-radius: 9999px; background: #0f172a; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px ${color}88; cursor: pointer;">
+            <div style="transform: rotate(${train.bearing}deg);">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="${color}" stroke="${color}"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+            </div>
+          </div>
+        `,
+        className: 'radar-train-marker-wrapper',
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      });
+
+      const marker = L.marker([train.currentLat, train.currentLng], { icon: customIcon });
+      marker.bindTooltip(`<b>${train.trainNumber} - ${train.trainName}</b><br/>Speed: ${train.speedKmph} km/h | Near ${train.currentStationCode}`, { direction: 'top' });
+      marker.on('click', () => {
+        onSelectTrain(train.trainNumber);
+        onNavigate('live-radar');
+      });
+      marker.addTo(map);
+    });
+
+    homeMapInstanceRef.current = map;
+    const t = setTimeout(() => map.invalidateSize(), 200);
+
+    return () => {
+      clearTimeout(t);
+      map.remove();
+      homeMapInstanceRef.current = null;
+    };
+  }, [onNavigate, onSelectTrain]);
 
   const handleTrackSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +148,31 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onSelectTrai
           <span>Open Live Radar</span>
           <ArrowRight className="w-4 h-4" />
         </button>
+      </div>
+
+      {/* Embedded Live Radar Map on Home Page */}
+      <div className="max-w-3xl mx-auto rounded-3xl overflow-hidden border border-slate-800 bg-[#090d16] shadow-2xl relative">
+        <div className="px-4 py-2.5 bg-[#0c1424] border-b border-slate-800 flex items-center justify-between text-xs font-mono">
+          <div className="flex items-center gap-2 text-cyan-400">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+            <span className="font-bold tracking-wider">ALL-INDIA LIVE GPS SATELLITE RADAR</span>
+          </div>
+          <button
+            onClick={() => onNavigate('live-radar')}
+            className="text-[11px] text-cyan-300 hover:text-white flex items-center gap-1 font-semibold cursor-pointer transition-colors bg-cyan-950/60 px-2 py-1 rounded-lg border border-cyan-800/60"
+          >
+            <span>Full Tactical Screen</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div 
+          ref={homeMapRef} 
+          style={{ height: '340px', width: '100%', background: '#090d16' }}
+        />
+        <div className="p-2.5 bg-[#0a101d] border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400 px-4">
+          <span>Active Flagships: 22436 Vande Bharat • 12004 Shatabdi • 12301 Rajdhani</span>
+          <span className="text-emerald-400 font-semibold">● RTIS NavIC Locked</span>
+        </div>
       </div>
 
       {/* Main Search Component */}

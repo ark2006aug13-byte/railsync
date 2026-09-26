@@ -30,7 +30,12 @@ from config import (
     TRAIN_NUMBER,
 )
 from engine.replay import get_available_run_dates, get_replay_state, get_replay_bounds
-from engine.live_rail_api import fetch_live_station_traffic, analyze_station_congestion
+from engine.live_rail_api import (
+    fetch_live_station_traffic, 
+    analyze_station_congestion,
+    fetch_railradar_live_map,
+    fetch_railradar_train_live
+)
 
 # ---------------------------------------------------------------------------
 # Import Pydantic Schemas from api.schemas
@@ -1348,6 +1353,35 @@ def get_live_station(
 
 
 # ---------------------------------------------------------------------------
+# RailRadar Live API Proxy Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/railradar/live-map")
+async def get_railradar_live_map(api_key: Optional[str] = Query(None)):
+    """
+    Fetches real-time All-India live map train positions from RailRadar API.
+    """
+    trains = fetch_railradar_live_map(api_key=api_key)
+    return {
+        "success": True,
+        "count": len(trains),
+        "data": trains
+    }
+
+
+@app.get("/api/railradar/train/{train_no}/live")
+async def get_railradar_train_live(train_no: str, api_key: Optional[str] = Query(None)):
+    """
+    Fetches live running telemetry, route, and halts for a specific train from RailRadar API.
+    """
+    train_data = fetch_railradar_train_live(train_no=train_no, api_key=api_key)
+    return {
+        "success": bool(train_data),
+        "train_no": train_no,
+        "data": train_data
+    }
+
+
+# ---------------------------------------------------------------------------
 # Root Status & Discovery Endpoint
 # ---------------------------------------------------------------------------
 @app.get("/")
@@ -1380,7 +1414,9 @@ def root():
             "/api/train/{train_number}/enhanced-eta",
             "/api/network/congestion-map",
             "/api/train/{train_number}/live-incidents",
-            "/api/station/{station_code}/live"
+            "/api/station/{station_code}/live",
+            "/api/railradar/live-map",
+            "/api/railradar/train/{train_no}/live"
         ]
     }
 

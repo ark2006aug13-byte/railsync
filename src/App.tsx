@@ -14,7 +14,7 @@ import { AppView } from './types';
 import { TrainProvider, useTrain } from './context/TrainContext';
 
 function AppContent() {
-  const [currentView, setCurrentView] = useState<AppView>('home');
+  const [currentView, setCurrentView] = useState<AppView>('live-radar');
   const { 
     selectedTrainNo, 
     setSelectedTrainNo, 
@@ -38,7 +38,7 @@ function AppContent() {
       <ReplayControlBar />
 
       {/* Main Content Area */}
-      <main className="flex-1 pb-16">
+      <main className={currentView === 'live-radar' ? 'flex-1 h-[calc(100vh-6.5rem)] relative overflow-hidden' : 'flex-1 pb-16'}>
         {currentView === 'home' && (
           <HomeScreen
             onNavigate={(view) => setCurrentView(view)}

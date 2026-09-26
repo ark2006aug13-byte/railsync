@@ -1111,3 +1111,47 @@ def analyze_station_congestion(station_payload: Dict[str, Any], target_train_no:
         "trains_manifest": parsed_trains
     }
 
+DEFAULT_RAILRADAR_API_KEY = os.environ.get("RAILRADAR_API_KEY", "rg_6d85f661939a40bc9c5f2ccbfea455ae")
+
+def fetch_railradar_live_map(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Fetches the live all-India train map snapshot from RailRadar API.
+    Returns 2,000+ active trains with real-time GPS coordinates.
+    """
+    key = api_key or DEFAULT_RAILRADAR_API_KEY
+    url = "https://api.railradar.in/v1/legacy/trains/live-map"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("User-Agent", "RailSync/2.0 (Mozilla/5.0)")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data.get("success"):
+                return data.get("data", [])
+            return []
+    except Exception as e:
+        print(f"[RailRadar API] Error fetching live map: {e}")
+        return []
+
+def fetch_railradar_train_live(train_no: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Fetches real-time status, route geometry and intermediate halts for a specific train.
+    """
+    key = api_key or DEFAULT_RAILRADAR_API_KEY
+    clean_no = str(train_no).strip()
+    url = f"https://api.railradar.in/v1/trains/{clean_no}/live"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("User-Agent", "RailSync/2.0 (Mozilla/5.0)")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data.get("success"):
+                return data.get("data", {})
+            return {}
+    except Exception as e:
+        print(f"[RailRadar API] Error fetching train {train_no} live status: {e}")
+        return {}
+
