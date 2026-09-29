@@ -253,17 +253,27 @@ class WeatherEngine:
                 best_icao = icao
         return best_icao
 
+    _METAR_CACHE: Dict[str, Tuple[Dict[str, Any], float]] = {}
+
     def _fetch_metar_weather(self, lat: float, lon: float) -> dict:
         """
         Fetches live real-world visibility and atmospheric data from aviationweather.gov METAR.
         Converts nautical / aviation units to standard metric units.
+        Caches by airport ICAO code for 15 minutes to guarantee sub-millisecond route calculations.
         """
+        import time
         icao = self._find_nearest_icao(lat, lon)
+        now = time.time()
+        if icao in self._METAR_CACHE:
+            cached_val, exp = self._METAR_CACHE[icao]
+            if now < exp:
+                return cached_val
+
         endpoint = WEATHER_SOURCES['airport_metar']['endpoint']
         url = f"{endpoint}?ids={icao}&format=json"
 
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 RailSync/2.0"})
-        with urllib.request.urlopen(req, timeout=6) as resp:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             raw_text = resp.read().decode('utf-8')
             items = json.loads(raw_text)
             if not items:
@@ -293,7 +303,7 @@ class WeatherEngine:
 
         desc = f"METAR {icao}: {wx_str or 'Fair'}, Vis {int(visib_meters)}m, {temp_c:.0f}°C"
 
-        return {
+        res = {
             'source': f"airport_metar:{icao}",
             'latitude': lat,
             'longitude': lon,
@@ -304,6 +314,8 @@ class WeatherEngine:
             'description': desc,
             'timestamp': datetime.now().isoformat()
         }
+        self._METAR_CACHE[icao] = (res, time.time() + 900.0)
+        return res
 
     def _get_climatological_fallback(self, lat: float, lon: float) -> dict:
         """

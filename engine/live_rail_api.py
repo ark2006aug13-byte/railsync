@@ -1155,3 +1155,45 @@ def fetch_railradar_train_live(train_no: str, api_key: Optional[str] = None) -> 
         print(f"[RailRadar API] Error fetching train {train_no} live status: {e}")
         return {}
 
+
+def fetch_indian_rail_train_schedule(train_no: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Integrates with Indian Rail API:
+    http://indianrailapi.com/api/v2/TrainSchedule/apikey/<apikey>/TrainNumber/<TrainNumber>/
+    Fetches the full route schedule (all stations, halts, STA, STD, distance) for any train.
+    """
+    key = api_key or os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
+    clean_no = str(train_no).strip()
+    if key:
+        url = f"http://indianrailapi.com/api/v2/TrainSchedule/apikey/{key}/TrainNumber/{clean_no}/"
+        req = urllib.request.Request(url, headers={"User-Agent": "RailSync/2.0 (Mozilla/5.0)"})
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                if data.get("ResponseCode") == "200":
+                    return data
+        except Exception as e:
+            print(f"[IndianRailAPI] Error fetching TrainSchedule for {train_no}: {e}")
+    return {}
+
+
+def fetch_indian_rail_train_information(train_no: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Integrates with Indian Rail API:
+    http://indianrailapi.com/api/v2/TrainInformation/apikey/<apikey>/TrainNumber/<TrainNumber>/
+    Fetches train name, source, destination, classes, and running days.
+    """
+    key = api_key or os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
+    clean_no = str(train_no).strip()
+    if key:
+        url = f"http://indianrailapi.com/api/v2/TrainInformation/apikey/{key}/TrainNumber/{clean_no}/"
+        req = urllib.request.Request(url, headers={"User-Agent": "RailSync/2.0 (Mozilla/5.0)"})
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                if data.get("ResponseCode") == "200":
+                    return data
+        except Exception as e:
+            print(f"[IndianRailAPI] Error fetching TrainInformation for {train_no}: {e}")
+    return {}
+

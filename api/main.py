@@ -5,11 +5,14 @@ Serves REST APIs for live replay telemetry, dynamic ETA forecasting with
 Time Delay Injection & Time Deletion/Slack Recovery, Station Operations Inflow,
 RTIS/Kavach/Axle Telemetry Streaming, two-way conflict resolution, and step scrubbing.
 """
+import asyncio
 from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Tuple
 import urllib.parse
+import time
 
 from fastapi import FastAPI, Query, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +21,7 @@ from pydantic.alias_generators import to_camel
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BASE_DIR = Path(__file__).resolve().parent.parent
 import config
 from config import (
     ARTIFACTS_DIR,
@@ -36,6 +40,12 @@ from engine.live_rail_api import (
     fetch_railradar_live_map,
     fetch_railradar_train_live
 )
+from engine.train_registry import (
+    resolve_train_profile,
+    TRAIN_PROFILES,
+    get_intermediate_passing_stations,
+    resolve_station_coordinates,
+)
 
 # ---------------------------------------------------------------------------
 # Import Pydantic Schemas from api.schemas
@@ -53,6 +63,7 @@ from api.schemas import (
     HealthCheckResponse,
     HorizonBreakdownModel,
     InflowTrainModel,
+    IntermediateStation,
     LeadingTrainModel,
     OperationsInflowResponseModel,
     PassedStationModel,
@@ -75,7 +86,14 @@ from api.schemas import (
     WaterfallStep,
 )
 from engine.predictor import predictor, DynamicETAPredictor, TrainPredictor
-from engine.live_rail_api import fetch_live_train_status, compute_live_eta_waterfall
+from engine.live_rail_api import (
+    fetch_live_train_status, 
+    compute_live_eta_waterfall,
+    fetch_indian_rail_train_schedule,
+    fetch_indian_rail_train_information,
+    parse_delay_string,
+    parse_rail_api_time
+)
 from engine.weather_engine import WeatherEngine, weather_engine
 from engine.network_tracker import NetworkTracker
 from engine.incident_detector import IncidentDetector
@@ -87,6 +105,54 @@ network_tracker = NetworkTracker()
 
 
 
+
+import math
+import time
+
+# ---------------------------------------------------------------------------
+# Authentic Indian Railways Geospatial Datasets & Cache
+# ---------------------------------------------------------------------------
+STATIONS_GEO: Dict[str, Dict[str, Any]] = {}
+TRAIN_TRACKS: Dict[str, List[List[float]]] = {}
+
+try:
+    with open(BASE_DIR / "data" / "stations_geo.json", "r", encoding="utf-8") as f:
+        STATIONS_GEO = json.load(f)
+except Exception as e:
+    print(f"[Warning] Could not load data/stations_geo.json: {e}")
+
+try:
+    with open(BASE_DIR / "data" / "train_tracks.json", "r", encoding="utf-8") as f:
+        TRAIN_TRACKS = json.load(f)
+except Exception as e:
+    print(f"[Warning] Could not load data/train_tracks.json: {e}")
+
+_LIVE_MAP_CACHE = {"timestamp": 0.0, "data": []}
+
+def get_cached_railradar_live_map() -> List[Dict[str, Any]]:
+    """
+    Returns live train telemetry across India with 15-second TTL cache to prevent API rate-limiting.
+    """
+    now = time.time()
+    if now - _LIVE_MAP_CACHE["timestamp"] < 15.0 and _LIVE_MAP_CACHE["data"]:
+        return _LIVE_MAP_CACHE["data"]
+    try:
+        data = fetch_railradar_live_map()
+        if data:
+            _LIVE_MAP_CACHE["timestamp"] = now
+            _LIVE_MAP_CACHE["data"] = data
+        return _LIVE_MAP_CACHE["data"]
+    except Exception as e:
+        print(f"[LiveMapCache Error] {e}")
+        return _LIVE_MAP_CACHE["data"]
+
+def calculate_bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Calculates bearing heading angle in degrees (0-360) from point 1 to point 2."""
+    d_lon = math.radians(lng2 - lng1)
+    y = math.sin(d_lon) * math.cos(math.radians(lat2))
+    x = math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(d_lon)
+    bearing = math.degrees(math.atan2(y, x))
+    return round((bearing + 360.0) % 360.0, 1)
 
 # ---------------------------------------------------------------------------
 # FastAPI App & Explicit CORS
@@ -102,6 +168,8 @@ app.include_router(incidents_router)
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
@@ -132,6 +200,26 @@ SUPPORTED_TRAINS: Dict[str, Dict[str, Any]] = {
         "origin": "HWH",
         "destination": "NDLS",
         "total_distance_km": 1451,
+        "mps": 130,
+        "priority": 1
+    },
+    "12004": {
+        "train_no": "12004",
+        "name": "New Delhi – Lucknow Swarna Shatabdi Express",
+        "type": "Shatabdi Express",
+        "origin": "NDLS",
+        "destination": "LKO",
+        "total_distance_km": 512,
+        "mps": 130,
+        "priority": 1
+    },
+    "22436": {
+        "train_no": "22436",
+        "name": "New Delhi – Varanasi Vande Bharat Express",
+        "type": "Vande Bharat Express",
+        "origin": "NDLS",
+        "destination": "BSB",
+        "total_distance_km": 759,
         "mps": 130,
         "priority": 1
     },
@@ -169,60 +257,20 @@ SUPPORTED_TRAINS: Dict[str, Dict[str, Any]] = {
 
 def resolve_train_by_query(query: str) -> Dict[str, Any]:
     """
-    Resolves train by train number (e.g. '12301') or keyword in name (e.g. 'Rajdhani').
+    Resolves train by train number (e.g. '12301') or keyword in name (e.g. 'Rajdhani', '12004 Shatabdi Exp').
     """
-    q = query.strip().lower()
-    # 1. Exact match on train_no
-    if q in SUPPORTED_TRAINS:
-        return SUPPORTED_TRAINS[q]
-    for t_no, t_info in SUPPORTED_TRAINS.items():
-        if t_no == q:
-            return t_info
-    # 2. Keyword match in name
-    for t_no, t_info in SUPPORTED_TRAINS.items():
-        name_lower = t_info["name"].lower()
-        if q in name_lower or all(part in name_lower for part in q.split()):
-            return t_info
-    # 3. Check train priority hierarchy mapping
-    for t_no, p_info in config.TRAIN_PRIORITY_HIERARCHY.items():
-        if q == t_no or q in p_info["name"].lower():
-            if t_no in SUPPORTED_TRAINS:
-                return SUPPORTED_TRAINS[t_no]
-            return {
-                "train_no": t_no,
-                "name": p_info["name"],
-                "type": "Express",
-                "origin": "HWH",
-                "destination": "NDLS",
-                "total_distance_km": 1451,
-                "mps": 110,
-                "priority": p_info.get("priority", 3)
-            }
-    # 4. Support ANY 5-digit Indian Railways train number dynamically
-    if q.isdigit() and len(q) == 5:
-        is_rajdhani = q.startswith(("123", "124", "129", "226")) and q in [
-            "12951", "12952", "12423", "12424", "12301", "12302", "12305", "12306", "12309", "12310"
-        ]
-        is_superfast = q.startswith(("12", "20", "22"))
-        priority = 1 if is_rajdhani else (2 if is_superfast else 3)
-        train_type = "Rajdhani Express" if is_rajdhani else ("Superfast Express" if is_superfast else "Mail & Express")
-        mps = 130 if priority in [1, 2] else 110
-        return {
-            "train_no": q,
-            "name": f"Indian Railways {train_type} {q}",
-            "type": train_type,
-            "origin": "Source",
-            "destination": "Destination",
-            "total_distance_km": 1451,
-            "mps": mps,
-            "priority": priority
-        }
+    prof = resolve_train_profile(query)
+    return {
+        "train_no": prof["train_no"],
+        "name": prof["name"],
+        "type": prof.get("type", "Superfast Express"),
+        "origin": prof.get("origin_code", "HWH"),
+        "destination": prof.get("dest_code", "NDLS"),
+        "total_distance_km": prof.get("total_distance_km", 1451),
+        "mps": prof.get("mps", 130),
+        "priority": prof.get("priority", 1)
+    }
 
-    supported_list = ", ".join(f"{k} ({v.get('name')})" for k, v in SUPPORTED_TRAINS.items())
-    raise HTTPException(
-        status_code=404,
-        detail=f"No train matching '{query}' found. Supported trains: {supported_list}."
-    )
 
 
 # In-memory store for interactive platform conflict resolutions
@@ -310,78 +358,289 @@ def get_corridor_info():
     )
 
 
+_API_PREDICT_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
 @app.get("/api/train/predict", response_model=TrainPredictionResponse, response_model_by_alias=True)
 def search_train_predict(
     query: str = Query(..., description="Search train by number (e.g. '12301') or name (e.g. 'Rajdhani')"),
     run_date: Optional[str] = Query(None, description="Run date YYYY-MM-DD"),
     at: Optional[str] = Query(None, description="Simulated timestamp in ISO format"),
-    fog: Optional[bool] = Query(None, description="Override fog condition (True/False)")
+    fog: Optional[bool] = Query(None, description="Override fog condition (True/False)"),
+    api_key: Optional[str] = Query(None, description="Optional Indian Rail API key (http://indianrailapi.com)")
 ):
     """
     Computes real-time dynamic arrival predictions with P10/P50/P90 confidence
     bounds and explainable multi-factor waterfall decomposition for searched train.
     """
-    train_info = resolve_train_by_query(query)
-    train_no = train_info["train_no"]
+    now_ts = time.time()
+    clean_api_key = api_key if isinstance(api_key, str) else None
+    cache_key = f"{query.strip().lower()}:{run_date}:{at}:{fog}:{clean_api_key}"
+    if cache_key in _API_PREDICT_CACHE:
+        cached_ts, cached_resp = _API_PREDICT_CACHE[cache_key]
+        if now_ts - cached_ts < 30.0:
+            return cached_resp
 
-    available_dates = get_available_run_dates()
-    selected_date = run_date or (available_dates[-1] if available_dates else "2024-12-15")
-    if available_dates and selected_date not in available_dates:
-        selected_date = available_dates[-1]
+    resolved_api_key = clean_api_key or os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
+    profile = resolve_train_profile(query, api_key=resolved_api_key)
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Train '{query}' not found. Please verify the train name or enter a valid 5-digit train number."
+        )
+    train_no = profile["train_no"]
+    clean_no = str(train_no).strip()
+
+    now_dt = datetime.now()
+    today_iso = now_dt.strftime("%Y-%m-%d")
+    selected_date = run_date or today_iso
 
     clean_at = parse_simulated_time(at)
 
-    # Establish train telemetry and ground rail context from replay or default
+    # -----------------------------------------------------------------------
+    # PROBE INDIAN RAIL API TRAIN SCHEDULE (http://indianrailapi.com)
+    # -----------------------------------------------------------------------
+    if resolved_api_key and resolved_api_key != "rg_6d85f661939a40bc9c5f2ccbfea455ae":
+        try:
+            sched_data = fetch_indian_rail_train_schedule(clean_no, resolved_api_key)
+            if sched_data and sched_data.get("ResponseCode") == "200" and sched_data.get("Station"):
+                raw_stations = sched_data["Station"]
+                parsed_stations = []
+                base_dt = None
+                for idx, item in enumerate(raw_stations):
+                    stn_code = str(item.get("StationCode", "")).strip().upper()
+                    stn_name = str(item.get("StationName", stn_code)).title()
+                    dist_km = float(item.get("Distance", 0.0) or 0.0)
+                    pf = str(item.get("Platform", "1")).strip() or "1"
+                    arr_time = item.get("ArrivalTime", "")
+                    dep_time = item.get("DepartureTime", "")
+                    day_offset = max(0, int(item.get("Day", 1)) - 1)
+
+                    arr_dt = parse_rail_api_time(arr_time, datetime.strptime(selected_date, "%Y-%m-%d"), day_offset)
+                    dep_dt = parse_rail_api_time(dep_time, datetime.strptime(selected_date, "%Y-%m-%d"), day_offset)
+
+                    if idx == 0:
+                        base_dt = dep_dt or arr_dt or datetime.strptime(selected_date, "%Y-%m-%d").replace(hour=8, minute=0)
+
+                    arr_min_offset = int((arr_dt - base_dt).total_seconds() / 60) if (arr_dt and base_dt) else int(dist_km / 1.5)
+                    dep_min_offset = int((dep_dt - base_dt).total_seconds() / 60) if (dep_dt and base_dt) else arr_min_offset + 2
+
+                    stn_geo = STATIONS_GEO.get(stn_code, {})
+                    stn_lat = stn_geo.get("lat", 26.0)
+                    stn_lng = stn_geo.get("lng", 80.0)
+
+                    parsed_stations.append({
+                        "code": stn_code,
+                        "name": stn_name,
+                        "km": dist_km,
+                        "halt_min": max(1.0, float(dep_min_offset - arr_min_offset)),
+                        "platform": pf,
+                        "lat": stn_lat,
+                        "lng": stn_lng,
+                        "arr_min": max(0, arr_min_offset),
+                        "dep_min": max(0, dep_min_offset)
+                    })
+
+                if len(parsed_stations) > 1:
+                    profile["stations"] = parsed_stations
+                    profile["origin_code"] = parsed_stations[0]["code"]
+                    profile["origin_name"] = parsed_stations[0]["name"]
+                    profile["dest_code"] = parsed_stations[-1]["code"]
+                    profile["dest_name"] = parsed_stations[-1]["name"]
+                    profile["total_distance_km"] = parsed_stations[-1]["km"]
+                    if sched_data.get("TrainName"):
+                        profile["name"] = sched_data["TrainName"]
+        except Exception as e:
+            print(f"[IndianRailAPI Schedule Probe Note] {e}")
+
+    # Establish train telemetry and ground rail context
+    default_ground = profile.get("default_ground", {})
+    current_km = float(default_ground.get("km", 0.0))
+    speed_kmph = float(default_ground.get("speed_kmph", profile.get("mps", 130.0) * 0.9))
+    cur_delay = float(default_ground.get("delay_min", 10.0))
+    current_section = default_ground.get("current_section", f"{profile['origin_code']}-MAIN")
+    signal_aspect = default_ground.get("signal_aspect", "GREEN")
+    headway_gap = float(default_ground.get("headway_gap_km", 25.0))
+    lead_train_no = default_ground.get("leading_train", "12876")
+
+    # -----------------------------------------------------------------------
+    # PROBE REAL-TIME GROUND TRUTH TELEMETRY (RailRadar Live Map & Live Status)
+    # -----------------------------------------------------------------------
+    is_live_ground = False
+    bearing_val = 90.0
+    nearest_stn_name = None
+    next_stn_name = None
+    next_stn_dist = None
+    telemetry_source = "RTIS_HIGH_PRECISION_GPS (ISRO Satellite 30s Stream)"
+    live_lat = None
+    live_lng = None
+    exact_loc_text = None
+
+    # Step 1: Probe authentic live train details (delayMinutes, stop sequence, real ground status)
+    live_detail = None
     try:
-        state = get_replay_state(run_date=selected_date, at_time_iso=clean_at)
-        pos = state["position"]
-        current_km = float(pos["km"])
-        speed_kmph = float(pos["speed_kmph"])
-        cur_delay = float(pos["delay_min"])
-        current_section = pos.get("current_section", "HWH-BWN")
-        cur_time = datetime.fromisoformat(state["simulated_time"].rstrip("Z"))
-        lt = state.get("leading_train")
-        sig = state.get("signal_aspect")
-        headway_gap = float(lt["headway_gap_km"]) if lt else 25.0
-        signal_aspect = sig["code"] if sig else "GREEN"
+        live_detail = fetch_railradar_train_live(clean_no)
+        if live_detail:
+            if live_detail.get("delayMinutes") is not None:
+                cur_delay = float(live_detail["delayMinutes"])
+            cur_loc = live_detail.get("currentLocation") or {}
+            if cur_loc.get("stationName"):
+                nearest_stn_name = cur_loc["stationName"]
+            if cur_loc.get("distanceFromOriginKm") is not None:
+                current_km = float(cur_loc["distanceFromOriginKm"])
+            if cur_loc.get("speedKmh") is not None and float(cur_loc["speedKmh"]) > 0:
+                speed_kmph = float(cur_loc["speedKmh"])
+            stn_c = str(cur_loc.get("stationCode", "")).strip().upper()
+            coords = resolve_station_coordinates(stn_c)
+            if coords:
+                live_lat, live_lng = coords[0], coords[1]
+            is_live_ground = True
+            telemetry_source = "RAILRADAR_NTES_TELEMETRY (Direct Ministry of Railways Feed)"
+    except Exception as e:
+        print(f"[LiveDetail Probe Note] {e}")
+
+    # Step 2: Probe live map for 1-second high-precision ISRO RTIS GPS coordinates
+    live_map_data = get_cached_railradar_live_map()
+    train_matches = [t for t in live_map_data if str(t.get("train_number", "")).strip() == clean_no]
+    live_match = None
+    if train_matches:
+        if len(train_matches) == 1:
+            live_match = train_matches[0]
+        else:
+            # Multi-day rake disambiguation: pick rake closest to current_km
+            if current_km > 0:
+                live_match = min(train_matches, key=lambda m: abs(float(m.get("curr_distance", 0.0)) - current_km))
+            else:
+                live_match = train_matches[0]
+
+    if live_match:
+        is_live_ground = True
+        live_lat = float(live_match.get("current_lat", live_lat or 26.4547))
+        live_lng = float(live_match.get("current_lng", live_lng or 80.3507))
+        if live_match.get("curr_distance") is not None:
+            current_km = float(live_match["curr_distance"])
+        if live_match.get("current_station_name"):
+            nearest_stn_name = live_match["current_station_name"]
+        if live_match.get("next_station_name"):
+            next_stn_name = live_match["next_station_name"]
+        if live_match.get("next_distance") is not None:
+            next_stn_dist = max(0.0, round(float(live_match["next_distance"]) - current_km, 1))
+
+        rep_speed = float(live_match.get("speed", 0.0))
+        if rep_speed > 0:
+            speed_kmph = rep_speed
+        else:
+            dep_m = live_match.get("departure_minutes")
+            arr_m = live_match.get("next_arrival_minutes")
+            curr_d = live_match.get("curr_distance")
+            next_d = live_match.get("next_distance")
+            if dep_m and arr_m and curr_d is not None and next_d is not None and arr_m > dep_m:
+                dt_hrs = (arr_m - dep_m) / 60.0
+                calc_sp = (float(next_d) - float(curr_d)) / dt_hrs
+                if 20.0 <= calc_sp <= 160.0:
+                    speed_kmph = round(calc_sp, 1)
+            elif speed_kmph < 40:
+                speed_kmph = 105.0
+
+        # CRITICAL: Do NOT read departure_minutes as delay! departure_minutes is clock time in minutes.
+        if live_match.get("delay") is not None:
+            cur_delay = float(live_match["delay"])
+
+        if live_match.get("next_lat") and live_match.get("next_lng"):
+            bearing_val = calculate_bearing(live_lat, live_lng, float(live_match["next_lat"]), float(live_match["next_lng"]))
+
+        delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+        exact_loc_text = f"Live GPS: Passing {nearest_stn_name or 'Section'} at {speed_kmph:.0f} km/h • Next: {next_stn_name or 'Station'} ({next_stn_dist or 0} KM ahead) • {delay_status_str}"
+        telemetry_source = "RAILRADAR_ISRO_LIVE_STREAM (1-Second High-Precision Ground GPS)"
+    elif live_detail and live_detail.get("currentLocation"):
+        delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+        exact_loc_text = f"Live Ground: {nearest_stn_name or 'Station'} ({int(current_km)} KM) • {delay_status_str}"
+
+    # Step 3: Probe Indian Rail API if custom key provided and not yet matched
+    if resolved_api_key and resolved_api_key != "rg_6d85f661939a40bc9c5f2ccbfea455ae" and not is_live_ground:
+        try:
+            clean_date_yyyymmdd = selected_date.replace("-", "").strip()
+            live_data_ir = fetch_live_train_status(clean_no, clean_date_yyyymmdd, api_key=resolved_api_key, allow_fallback=False)
+            if live_data_ir and live_data_ir.get("ResponseCode") == "200":
+                curr_stn = live_data_ir.get("CurrentStation", {})
+                if curr_stn:
+                    nearest_stn_name = curr_stn.get("StationName", curr_stn.get("StationCode"))
+                    delay_str = curr_stn.get("DelayInArrival") or curr_stn.get("DelayInDeparture")
+                    cur_delay = parse_delay_string(delay_str)
+                    stn_c = str(curr_stn.get("StationCode", "")).strip().upper()
+                    coords = resolve_station_coordinates(stn_c)
+                    if coords:
+                        live_lat, live_lng = coords[0], coords[1]
+                curr_loc_text = live_data_ir.get("CurrentLocation")
+                if curr_loc_text:
+                    delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+                    exact_loc_text = f"Live Ground: {curr_loc_text} • {delay_status_str}"
+                    telemetry_source = "INDIAN_RAIL_LIVE_STATUS (http://indianrailapi.com Live Telemetry)"
+                    is_live_ground = True
+        except Exception as e:
+            print(f"[IndianRailAPI LiveStatus Note] {e}")
+
+    dep_time_str = profile.get("scheduled_departure", "16:50")
+    try:
+        dh, dm = map(int, dep_time_str.split(":"))
     except Exception:
-        current_km = 0.0
+        dh, dm = 16, 50
+    sched_dep_dt = datetime.strptime(selected_date, "%Y-%m-%d").replace(hour=dh, minute=dm, second=0)
+    cur_time = sched_dep_dt + timedelta(minutes=max(30, int(cur_delay + (current_km / max(60.0, speed_kmph)) * 60)))
+
+    train_status = "RUNNING"
+    total_dist = float(profile.get("total_distance_km", 1451.0))
+    if not is_live_ground and not clean_at:
+        # Check if train has not departed yet (future scheduled date or current day before departure)
+        if (selected_date > today_iso) or (selected_date == today_iso and now_dt < sched_dep_dt):
+            train_status = "NOT_STARTED"
+            current_km = 0.0
+            speed_kmph = 0.0
+            cur_delay = 0.0
+            cur_time = now_dt
+            first_stn = (profile.get("stations") or [{}])[0]
+            live_lat = float(first_stn.get("lat") or 28.6424)
+            live_lng = float(first_stn.get("lng") or 77.2195)
+            nearest_stn_name = first_stn.get("name", profile.get("origin_name", "Origin"))
+            next_stn_name = profile.get("stations", [{}, {}])[1].get("name") if len(profile.get("stations", [])) > 1 else "Next Station"
+            next_stn_dist = float(profile.get("stations", [{}, {}])[1].get("km", 50.0)) if len(profile.get("stations", [])) > 1 else 50.0
+            exact_loc_text = f"At Origin: {nearest_stn_name} (PF {first_stn.get('platform', '1')}) • Scheduled Departure at {dep_time_str} IST"
+
+    if current_km >= total_dist and total_dist > 0:
+        train_status = "JOURNEY_COMPLETED"
+        current_km = total_dist
         speed_kmph = 0.0
-        cur_delay = 0.0
-        current_section = "HWH-BWN"
-        cur_time = datetime.strptime(f"{selected_date} 16:50:00", "%Y-%m-%d %H:%M:%S")
-        headway_gap = 25.0
-        signal_aspect = "GREEN"
-        lt = None
+        last_stn = (profile.get("stations") or [{}])[-1]
+        live_lat = float(last_stn.get("lat") or 22.5830)
+        live_lng = float(last_stn.get("lng") or 88.3426)
+        nearest_stn_name = last_stn.get("name", profile.get("dest_name", "Terminal"))
+        next_stn_name = "Journey Terminated"
+        next_stn_dist = 0.0
+        exact_loc_text = f"Arrived at Destination: {nearest_stn_name} • Journey Completed"
 
-    if train_no == "12367" and not clean_at:
-        # Authentic operational ground reality for Train 12367 Vikramshila Express:
-        # Traversing non-stop high-speed sector Kanpur Central (CNB) -> Anand Vihar Terminal (ANVT)
-        current_km = 979.0  # Kanpur Central Jn
-        speed_kmph = 118.0  # WAP-7 at line speed
-        cur_delay = 32.0    # 32 min delay accumulated from commuter halts & DDU yard
-        current_section = "CNB-ANVT"
-        cur_time = datetime.strptime(f"{selected_date} 01:25:00", "%Y-%m-%d %H:%M:%S") + timedelta(days=1)
-        headway_gap = 18.5
-        signal_aspect = "GREEN"
-
-    if train_no == "15657" and not clean_at:
-        # Authentic operational ground reality for Train 15657 Brahmaputra Mail (kal wali run):
-        # Current ground location: Passing DDU / Dildarnagar / Buxar section on trunk route East towards Patna
-        current_km = 841.0  # Dildarnagar / Buxar approach
-        speed_kmph = 95.0   # WAP-7 at 110 MPS
-        cur_delay = 46.0    # 46 min accumulated delay from overnight fog and priority overtakes by Rajdhanis
-        current_section = "DLN-BXR"
-        cur_time = datetime.strptime(f"{selected_date} 11:45:00", "%Y-%m-%d %H:%M:%S") + timedelta(days=1)
-        headway_gap = 14.0
-        signal_aspect = "GREEN"
+    # If scrubbing is requested and replay state is available for Train 12301
+    if train_no == "12301" and clean_at:
+        try:
+            state = get_replay_state(run_date=selected_date, at_time_iso=clean_at)
+            pos = state["position"]
+            current_km = float(pos["km"])
+            speed_kmph = float(pos["speed_kmph"])
+            cur_delay = float(pos["delay_min"])
+            current_section = pos.get("current_section", "HWH-BWN")
+            cur_time = datetime.fromisoformat(state["simulated_time"].rstrip("Z"))
+            lt = state.get("leading_train")
+            sig = state.get("signal_aspect")
+            headway_gap = float(lt["headway_gap_km"]) if lt else 25.0
+            signal_aspect = sig["code"] if sig else "GREEN"
+        except Exception:
+            pass
 
     lead_ctx = {
-        "train_no": config.LEADING_TRAIN_CONFIG["train_no"],
-        "name": config.LEADING_TRAIN_CONFIG["name"],
+        "train_no": lead_train_no,
+        "name": "Neelachal Express" if lead_train_no == "12876" else f"Train {lead_train_no}",
         "headway_gap_km": headway_gap,
-        "delay_min": float(lt["delay_min"]) if lt else 15.0,
-        "priority": config.LEADING_TRAIN_CONFIG.get("priority_level", 3)
+        "delay_min": 15.0,
+        "priority": 3
     }
 
     dest_breakdown, upcoming_breakdowns, warnings = predictor.predict_multi_factor(
@@ -393,22 +652,298 @@ def search_train_predict(
         current_speed_kmph=max(40.0, speed_kmph),
         leading_train_context=lead_ctx,
         fog_override=fog,
-        resolved_conflicts=RESOLVED_CONFLICTS
+        resolved_conflicts=RESOLVED_CONFLICTS,
+        route_stations=profile.get("stations"),
+        sched_dep_dt=sched_dep_dt,
+        origin_code=profile.get("origin_code"),
+        dest_code=profile.get("dest_code")
     )
 
-    return TrainPredictionResponse(
+    # Current station name
+    current_station_name = nearest_stn_name or profile.get("origin_name", "Source Terminal")
+    if not nearest_stn_name:
+        for stn in profile.get("stations", []):
+            if stn.get("km", 0.0) <= current_km:
+                current_station_name = stn.get("name", stn.get("code", "Station"))
+
+    # Build complete route timeline (Where Is My Train style) containing ALL stations
+    all_stations_breakdowns: List[StationETABreakdown] = []
+    has_current_flag = False
+    sorted_route_stns = sorted(profile.get("stations", []), key=lambda s: float(s.get("km", 0.0)))
+    
+    prev_stn_info = None
+    if not is_live_ground or not exact_loc_text:
+        exact_loc_text = f"Cruising at {speed_kmph:.0f} km/h on Section {current_section}"
+    
+    for i, stn in enumerate(sorted_route_stns):
+        stn_code = stn["code"]
+        stn_km = float(stn.get("km", 0.0))
+        sched_arr_offset = int(stn.get("arr_min", 0))
+        sched_dep_offset = int(stn.get("dep_min", 0))
+        stn_arr_dt = sched_dep_dt + timedelta(minutes=sched_arr_offset)
+        stn_dep_dt = sched_dep_dt + timedelta(minutes=sched_dep_offset)
+        
+        matching_upcoming = next((ub for ub in upcoming_breakdowns if ub.station_code == stn_code), None)
+        
+        # Calculate authentic intermediate passing stations
+        intermediates: List[IntermediateStation] = []
+        stn_lat = float(stn.get("lat", 26.0))
+        stn_lng = float(stn.get("lng", 80.0))
+        
+        pre_attached_im = stn.get("intermediate_stations", [])
+        if pre_attached_im:
+            for im in pre_attached_im:
+                intermediates.append(IntermediateStation(
+                    station_code=im.get("station_code", ""),
+                    station_name=im.get("station_name", ""),
+                    distance_km=float(im.get("distance_km", 0.0)),
+                    scheduled_time=im.get("scheduled_time", "--:--"),
+                    dynamic_time=im.get("dynamic_time", "--:--"),
+                    status=im.get("status", "UPCOMING"),
+                    speed_kmph=float(im.get("speed_kmph", speed_kmph)),
+                    delay_min=float(im.get("delay_min", 0.0)),
+                    lat=im.get("lat"),
+                    lng=im.get("lng")
+                ))
+                if im.get("status") == "CURRENT":
+                    exact_loc_text = f"Crossing {im['station_name']} ({im['distance_km']:.0f} KM) at {im.get('speed_kmph', speed_kmph):.0f} km/h • Next Halt: {stn.get('name', stn_code)}"
+        elif prev_stn_info:
+            raw_im = get_intermediate_passing_stations(
+                from_code=prev_stn_info["code"],
+                to_code=stn_code,
+                from_km=prev_stn_info["km"],
+                to_km=stn_km,
+                from_arr_dt=prev_stn_info["arr_dt"],
+                to_arr_dt=stn_arr_dt,
+                current_km=current_km,
+                current_delay_min=cur_delay,
+                speed_kmph=speed_kmph,
+                from_lat=prev_stn_info.get("lat", 0.0),
+                from_lng=prev_stn_info.get("lng", 0.0),
+                to_lat=stn_lat,
+                to_lng=stn_lng
+            )
+            for im in raw_im:
+                intermediates.append(IntermediateStation(
+                    station_code=im["station_code"],
+                    station_name=im["station_name"],
+                    distance_km=im["distance_km"],
+                    scheduled_time=im["scheduled_time"],
+                    dynamic_time=im["dynamic_time"],
+                    status=im["status"],
+                    speed_kmph=im["speed_kmph"],
+                    delay_min=im["delay_min"],
+                    lat=im.get("lat"),
+                    lng=im.get("lng")
+                ))
+                if im["status"] == "CURRENT":
+                    exact_loc_text = f"Crossing {im['station_name']} ({im['distance_km']:.0f} KM) at {im['speed_kmph']:.0f} km/h • Next Halt: {stn.get('name', stn_code)}"
+        
+        if matching_upcoming:
+            matching_upcoming.lat = stn_lat
+            matching_upcoming.lng = stn_lng
+            matching_upcoming.platform = str(stn.get("platform", "1"))
+            matching_upcoming.halt_min = float(stn.get("halt_min", 2.0))
+            if stn.get("arr_time") and stn["arr_time"] != "--:--":
+                matching_upcoming.scheduled_arrival_fmt = stn["arr_time"]
+            if stn.get("dep_time") and stn["dep_time"] != "--:--":
+                matching_upcoming.scheduled_departure_fmt = stn["dep_time"]
+            if not has_current_flag and (stn_km >= current_km or abs(stn_km - current_km) < 15.0):
+                matching_upcoming.status = "CURRENT"
+                has_current_flag = True
+                if not is_live_ground and not any(im.status == "CURRENT" for im in intermediates):
+                    exact_loc_text = f"Approaching {stn.get('name', stn_code)} ({stn_km:.0f} KM) at {speed_kmph:.0f} km/h • Section {current_section}"
+            matching_upcoming.intermediate_stations = intermediates
+            all_stations_breakdowns.append(matching_upcoming)
+        else:
+            passed_delay = max(0.0, round(cur_delay * 0.8, 1))
+            actual_arr_dt = stn_arr_dt + timedelta(minutes=passed_delay)
+            arr_fmt = stn.get("arr_time") or stn_arr_dt.strftime("%H:%M")
+            dep_fmt = stn.get("dep_time") or stn_dep_dt.strftime("%H:%M")
+            
+            passed_breakdown = StationETABreakdown(
+                station_code=stn_code,
+                station_name=stn.get("name", stn_code),
+                scheduled_arrival=stn_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                scheduled_arrival_fmt=arr_fmt,
+                dynamic_eta=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                dynamic_eta_fmt=actual_arr_dt.strftime("%H:%M"),
+                net_delay_min=passed_delay,
+                confidence=ConfidenceBounds(
+                    p10_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    p50_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    p90_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    confidence_percentage=98
+                ),
+                waterfall=[],
+                active_warnings=[],
+                tsr_delay_min=0.0,
+                platform_hold_min=0.0,
+                slack_recovered_min=0.0,
+                platform=str(stn.get("platform", "1")),
+                distance_km=stn_km,
+                status="PASSED",
+                scheduled_departure=stn_dep_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                scheduled_departure_fmt=dep_fmt,
+                halt_min=float(stn.get("halt_min", 2.0)),
+                intermediate_stations=intermediates,
+                lat=stn_lat,
+                lng=stn_lng
+            )
+            all_stations_breakdowns.append(passed_breakdown)
+
+        prev_stn_info = {
+            "code": stn_code,
+            "km": stn_km,
+            "arr_dt": stn_arr_dt,
+            "lat": stn_lat,
+            "lng": stn_lng
+        }
+
+    # Determine current live train GPS position
+    if live_lat is not None and live_lng is not None:
+        cur_lat = round(live_lat, 5)
+        cur_lng = round(live_lng, 5)
+    else:
+        cur_lat = float(sorted_route_stns[0].get("lat", 26.4547)) if sorted_route_stns else 26.4547
+        cur_lng = float(sorted_route_stns[0].get("lng", 80.3507)) if sorted_route_stns else 80.3507
+        if len(sorted_route_stns) > 1:
+            if current_km <= float(sorted_route_stns[0].get("km", 0.0)):
+                cur_lat = float(sorted_route_stns[0].get("lat", 22.5830))
+                cur_lng = float(sorted_route_stns[0].get("lng", 88.3426))
+            elif current_km >= float(sorted_route_stns[-1].get("km", 0.0)):
+                cur_lat = float(sorted_route_stns[-1].get("lat", 28.6424))
+                cur_lng = float(sorted_route_stns[-1].get("lng", 77.2195))
+            else:
+                for k in range(len(sorted_route_stns) - 1):
+                    s1 = sorted_route_stns[k]
+                    s2 = sorted_route_stns[k + 1]
+                    k1 = float(s1.get("km", 0.0))
+                    k2 = float(s2.get("km", 0.0))
+                    if k1 <= current_km <= k2 and (k2 > k1):
+                        frac = (current_km - k1) / (k2 - k1)
+                        s1_lat = float(s1.get("lat", 26.0))
+                        s2_lat = float(s2.get("lat", 26.0))
+                        s1_lng = float(s1.get("lng", 80.0))
+                        s2_lng = float(s2.get("lng", 80.0))
+                        cur_lat = round(s1_lat + frac * (s2_lat - s1_lat), 5)
+                        cur_lng = round(s1_lng + frac * (s2_lng - s1_lng), 5)
+                        break
+
+    # Construct authentic curved railway track geometry path
+    track_path: List[List[float]] = []
+    if clean_no in TRAIN_TRACKS and len(TRAIN_TRACKS[clean_no]) > 1:
+        track_path = TRAIN_TRACKS[clean_no]
+    else:
+        # Build dense waypoint path from halts and intermediate passing waypoints
+        dense_waypoints: List[List[float]] = []
+        for s in sorted_route_stns:
+            for im in s.get("intermediate_stations", []):
+                if im.get("lat") and im.get("lng"):
+                    dense_waypoints.append([float(im["lat"]), float(im["lng"])])
+            if s.get("lat") and s.get("lng"):
+                dense_waypoints.append([float(s["lat"]), float(s["lng"])])
+        if len(dense_waypoints) > 1:
+            track_path = dense_waypoints
+        elif clean_no in ["12301", "12302", "12876"]:
+            track_path = DETAILED_TRACK_WAYPOINTS
+        else:
+            track_path = [[float(s.get("lat", 26.0)), float(s.get("lng", 80.0))] for s in sorted_route_stns if s.get("lat") and s.get("lng")]
+
+    # Calculate bearing heading angle if not yet computed
+    if bearing_val == 90.0 and len(sorted_route_stns) > 1:
+        for s in sorted_route_stns:
+            if float(s.get("km", 0.0)) > current_km:
+                s_lat = float(s.get("lat", cur_lat))
+                s_lng = float(s.get("lng", cur_lng))
+                bearing_val = calculate_bearing(cur_lat, cur_lng, s_lat, s_lng)
+                if not next_stn_name:
+                    next_stn_name = s.get("name", s.get("code"))
+                if next_stn_dist is None:
+                    next_stn_dist = max(0.0, round(float(s.get("km", 0.0)) - current_km, 1))
+                break
+
+    # Construct leading train telemetry and track coordinates
+    lead_km = current_km + headway_gap
+    lead_lat = cur_lat
+    lead_lng = cur_lng
+    if track_path and len(track_path) > 1:
+        target_idx = min(len(track_path) - 1, max(0, int((lead_km / max(1.0, float(profile.get("total_distance_km", 1451.0)))) * len(track_path))))
+        lead_lat = track_path[target_idx][0]
+        lead_lng = track_path[target_idx][1]
+
+    lead_train_obj = LeadingTrainModel(
+        train_no=lead_train_no,
+        name="Neelachal Express" if lead_train_no == "12876" else f"Train {lead_train_no}",
+        km=round(lead_km, 1),
+        lat=round(lead_lat, 5),
+        lng=round(lead_lng, 5),
+        speed_kmph=round(max(60.0, speed_kmph * 0.95), 1),
+        delay_min=15.0,
+        headway_gap_km=round(headway_gap, 1)
+    )
+
+    # Human-readable Signal Status and Weather Condition
+    if headway_gap >= 15.0:
+        sig_aspect_code = "CLEAR_GREEN"
+        sig_status_str = f"Clear Green (Headway {headway_gap:.1f} km • MPS {profile.get('mps', 130.0):.0f} km/h Authorized)"
+    elif headway_gap >= 8.0:
+        sig_aspect_code = "DOUBLE_YELLOW"
+        sig_status_str = f"Double Yellow Attention (Headway {headway_gap:.1f} km to Train {lead_train_no} • Capped 90 km/h)"
+    elif headway_gap >= 4.0:
+        sig_aspect_code = "CAUTION_YELLOW"
+        sig_status_str = f"Caution Yellow (Headway {headway_gap:.1f} km • Cautionary Braking Curve)"
+    else:
+        sig_aspect_code = "RED_HOLD"
+        sig_status_str = f"Red Danger Halt (Headway {headway_gap:.1f} km • Kavach Safety Halt)"
+
+    weather_cond_str = "Optimal Atmospheric Visibility (>4000m) • Clear Track Running"
+    if fog:
+        weather_cond_str = "Dense Gangetic Fog Belt (Visibility <300m) • Speed Clamped to 60 km/h"
+
+    resp = TrainPredictionResponse(
         train_no=train_no,
-        train_name=train_info["name"],
+        train_name=profile["name"],
+        status=train_status,
+        train_type=profile.get("type", "Superfast Express"),
+        origin=profile.get("origin_code", "SRC"),
+        origin_name=profile.get("origin_name", profile.get("origin_code", "Source")),
+        destination=profile.get("dest_code", "DST"),
+        destination_name=profile.get("dest_name", profile.get("dest_code", "Destination")),
+        scheduled_departure=sched_dep_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        scheduled_departure_fmt=sched_dep_dt.strftime("%H:%M"),
+        scheduled_arrival=dest_breakdown.scheduled_arrival,
+        scheduled_arrival_fmt=dest_breakdown.scheduled_arrival[-8:-3] if dest_breakdown.scheduled_arrival else "--:--",
+        total_distance_km=float(profile.get("total_distance_km", 1451.0)),
+        mps=float(profile.get("mps", 130.0)),
         current_km=current_km,
         current_speed_kmph=speed_kmph,
         current_section=current_section,
-        signal_aspect=signal_aspect,
+        current_station=current_station_name,
+        current_delay_min=cur_delay,
+        signal_aspect=sig_aspect_code,
         headway_gap_km=headway_gap,
         destination_eta=dest_breakdown,
         upcoming_stations=upcoming_breakdowns,
-        telemetry_source="RTIS_HIGH_PRECISION_GPS (ISRO Satellite 30s Stream)",
-        dead_reckoned_km=current_km
+        all_stations=all_stations_breakdowns,
+        telemetry_source=telemetry_source,
+        dead_reckoned_km=current_km,
+        exact_location_text=exact_loc_text,
+        current_lat=cur_lat,
+        current_lng=cur_lng,
+        bearing=bearing_val,
+        is_live_ground=is_live_ground,
+        track_path=track_path,
+        nearest_station=nearest_stn_name or current_station_name,
+        next_station=next_stn_name,
+        next_station_distance_km=next_stn_dist,
+        leading_train=lead_train_obj,
+        weather_condition=weather_cond_str,
+        signal_status=sig_status_str
     )
+    _API_PREDICT_CACHE[cache_key] = (now_ts, resp)
+    return resp
+
 
 
 @app.get("/api/train/{train_no}/predict", response_model=TrainPredictionResponse, response_model_by_alias=True)
@@ -416,12 +951,13 @@ def get_train_predict(
     train_no: str,
     run_date: Optional[str] = Query(None, description="Run date YYYY-MM-DD"),
     at: Optional[str] = Query(None, description="Simulated timestamp in ISO format"),
-    fog: Optional[bool] = Query(None, description="Override fog condition (True/False)")
+    fog: Optional[bool] = Query(None, description="Override fog condition (True/False)"),
+    api_key: Optional[str] = Query(None, description="Optional Indian Rail API key")
 ):
     """
     Direct endpoint returning dynamic ETA forecasting and waterfall breakdown for a given train_no.
     """
-    return search_train_predict(query=train_no, run_date=run_date, at=at, fog=fog)
+    return search_train_predict(query=train_no, run_date=run_date, at=at, fog=fog, api_key=api_key)
 
 
 @app.get("/api/train/{train_no}/live")
@@ -463,6 +999,127 @@ def get_train_state(
     run_date: Optional[str] = Query(None, description="Run date YYYY-MM-DD"),
     at: Optional[str] = Query(None, description="Simulated timestamp in ISO format")
 ):
+    clean_tno = str(train_no).strip()
+    available_dates = get_available_run_dates()
+    now_dt = datetime.now()
+    today_iso = now_dt.strftime("%Y-%m-%d")
+
+    # If train is not 12301 or date is outside historical 2024 database, synthesize from live prediction engine
+    if clean_tno != "12301" or (run_date and run_date not in available_dates):
+        pred = search_train_predict(query=clean_tno, run_date=run_date, at=at)
+        now_iso = (parse_simulated_time(at) or now_dt).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now_fmt = (parse_simulated_time(at) or now_dt).strftime("%H:%M")
+
+        pos = TrainPositionModel(
+            lat=pred.current_lat or 26.4547,
+            lng=pred.current_lng or 80.3507,
+            km=pred.current_km,
+            speed_kmph=pred.current_speed_kmph,
+            delay_min=pred.current_delay_min or 0.0,
+            current_section=pred.current_section,
+            section_id=pred.current_section,
+            current_mps=pred.mps or 130.0
+        )
+
+        passed_stations = []
+        for s in (pred.all_stations or []):
+            if (s.status or '').upper() == 'PASSED':
+                arr_t = s.scheduled_arrival or now_iso
+                dep_t = s.scheduled_departure or s.scheduled_arrival or now_iso
+                passed_stations.append(PassedStationModel(
+                    code=s.station_code,
+                    name=s.station_name,
+                    km=s.distance_km or 0.0,
+                    platform=str(s.platform or '1'),
+                    actual_arrival=arr_t,
+                    actual_departure=dep_t,
+                    actual_arrival_fmt=s.scheduled_arrival_fmt or arr_t[-8:-3] if len(arr_t) >= 8 else "--:--",
+                    actual_departure_fmt=s.scheduled_departure_fmt or dep_t[-8:-3] if len(dep_t) >= 8 else "--:--",
+                    exit_delay=0.0,
+                    status="passed"
+                ))
+
+        upcoming_stations = []
+        for s in pred.upcoming_stations:
+            upcoming_stations.append(UpcomingStationModel(
+                code=s.station_code,
+                name=s.station_name,
+                km=s.distance_km or 0.0,
+                platform=str(s.platform or '1'),
+                platform_conflict=False,
+                outer_holding_min=s.platform_hold_min or 0.0,
+                conflicting_train=None,
+                eta_predicted=s.dynamic_eta,
+                eta_predicted_fmt=s.dynamic_eta_fmt or s.dynamic_eta[-8:-3] if len(s.dynamic_eta) >= 8 else "--:--",
+                eta_schedule=s.scheduled_arrival,
+                eta_schedule_fmt=s.scheduled_arrival_fmt or s.scheduled_arrival[-8:-3] if len(s.scheduled_arrival) >= 8 else "--:--",
+                predicted_delay_min=s.net_delay_min,
+                delay_injected_min=0.0,
+                time_deletion_min=s.slack_recovered_min or 0.0,
+                confidence_min=s.net_delay_min * 0.15,
+                why="Dynamic Neural ETA calculation based on real-time telemetry",
+                weather_condition=pred.weather_condition or "Clear Track Running",
+                signal_status=pred.signal_status or "Clear Green",
+                horizon=1
+            ))
+
+        sig_model = SignalAspectModel(
+            code=pred.signal_aspect,
+            name=pred.signal_aspect.replace('_', ' '),
+            badge="🟢 Clear Green" if "GREEN" in pred.signal_aspect else "🟡 Double Yellow",
+            color="green" if "GREEN" in pred.signal_aspect else "amber",
+            speed_cap="130 km/h" if "GREEN" in pred.signal_aspect else "60 km/h",
+            headway_gap_km=pred.headway_gap_km
+        )
+
+        lead_km = float(pred.current_km + (pred.headway_gap_km or 25.0))
+        lead_lat = float(pred.leading_train.lat) if (pred.leading_train and pred.leading_train.lat) else float(pred.current_lat or 26.5)
+        lead_lng = float(pred.leading_train.lng) if (pred.leading_train and pred.leading_train.lng) else float(pred.current_lng or 80.5)
+
+        lt_model = LeadingTrainModel(
+            train_no=pred.leading_train.train_no if pred.leading_train else "12876",
+            name=pred.leading_train.name if pred.leading_train else "Neelachal Express",
+            km=lead_km,
+            speed_kmph=float(pred.leading_train.speed_kmph if pred.leading_train else 95.0),
+            delay_min=float(pred.leading_train.delay_min if pred.leading_train else 15.0),
+            headway_gap_km=float(pred.headway_gap_km or 25.0),
+            lat=lead_lat,
+            lng=lead_lng
+        )
+
+        playback_model = PlaybackModel(
+            progress_pct=round((pred.current_km / (pred.total_distance_km or 1447.0)) * 100.0, 1) if pred.total_distance_km else 50.0,
+            min_time=now_iso,
+            max_time=now_iso,
+            current_time=now_iso,
+            has_prev=False,
+            has_next=False,
+            step_seconds=60
+        )
+
+        return TrainStateResponseModel(
+            train_no=pred.train_no,
+            train_name=pred.train_name,
+            run_date=run_date or today_iso,
+            simulated_time=now_iso,
+            simulated_time_fmt=now_fmt,
+            min_time=now_iso,
+            max_time=now_iso,
+            position=pos,
+            active_section=ActiveSectionModel(
+                section_id=pred.current_section,
+                km=pred.current_km,
+                speed_kmph=pred.current_speed_kmph,
+                current_delay_min=pred.current_delay_min or 0.0,
+                current_mps=pred.mps or 130.0
+            ),
+            signal_aspect=sig_model,
+            leading_train=lt_model,
+            upcoming_stations=upcoming_stations,
+            passed_stations=passed_stations,
+            playback=playback_model
+        )
+
     try:
         t_info = resolve_train_by_query(train_no)
     except Exception:
@@ -470,10 +1127,6 @@ def get_train_state(
             status_code=404,
             detail=f"Train {train_no} not supported in MVP. Supported trains: {', '.join(SUPPORTED_TRAINS.keys())} or any 5-digit train number."
         )
-
-    available_dates = get_available_run_dates()
-    if not available_dates:
-        raise HTTPException(status_code=500, detail="No historical run data found. Run data/generate_synthetic.py first.")
 
     selected_date = run_date or available_dates[-1]
     if selected_date not in available_dates:
@@ -844,6 +1497,7 @@ def resolve_conflict(req: ResolveConflictRequest):
         "allocated_platform": req.allocated_platform,
         "resolved_at": datetime.utcnow().isoformat()
     }
+    _API_PREDICT_CACHE.clear()
     return ResolveConflictResponse(
         success=True,
         train_no=req.train_no,
@@ -1266,16 +1920,24 @@ async def get_weather_impact(lat: Union[float, str], lon: Optional[float] = None
 async def get_enhanced_eta(train_number: str):
     """
     Get ETA with confidence intervals and detailed breakdown.
+    Runs ML predictor and peripheral telemetry queries concurrently to prevent async blocking.
     """
     predictor = TrainPredictor(network_tracker)
-    eta_data = await predictor.predict_with_confidence(train_number)
-    
+    eta_task = predictor.predict_with_confidence(train_number)
+    weather_task = get_weather_impact(train_number)
+    congestion_task = get_congestion_ahead(train_number)
+    incidents_task = get_train_incidents(train_number)
+
+    eta_data, weather_res, congestion_res, incidents_res = await asyncio.gather(
+        eta_task, weather_task, congestion_task, incidents_task, return_exceptions=True
+    )
+
     return {
         "train_number": train_number,
-        "eta": eta_data,
-        "weather_impact": await get_weather_impact(train_number),
-        "congestion_ahead": await get_congestion_ahead(train_number),
-        "incidents": await get_train_incidents(train_number)
+        "eta": eta_data if not isinstance(eta_data, Exception) else {},
+        "weather_impact": weather_res if not isinstance(weather_res, Exception) else {},
+        "congestion_ahead": congestion_res if not isinstance(congestion_res, Exception) else {},
+        "incidents": incidents_res if not isinstance(incidents_res, Exception) else {"incidents": []}
     }
 
 

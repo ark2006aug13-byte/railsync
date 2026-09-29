@@ -9,7 +9,7 @@ import { Page4PlatformResolver } from './components/Page4PlatformResolver';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<PageId>('search');
-  const [currentTrain, setCurrentTrain] = useState<string>('12301 / Howrah – New Delhi Rajdhani Express');
+  const [currentTrain, setCurrentTrain] = useState<string>('');
   const [isRerouted, setIsRerouted] = useState<boolean>(false);
 
   // Sync hash routing for browser back/forward and deep linking
@@ -49,15 +49,7 @@ export default function App() {
   };
 
   const handleSelectTrain = (name: string) => {
-    if (name.includes('Rajdhani')) {
-      setCurrentTrain('12301 / Howrah – New Delhi Rajdhani Express');
-    } else if (name.includes('Shatabdi')) {
-      setCurrentTrain('12004 / New Delhi – Lucknow Swarna Shatabdi Express');
-    } else if (name.includes('Vande Bharat')) {
-      setCurrentTrain('22436 / New Delhi – Varanasi Vande Bharat Express');
-    } else {
-      setCurrentTrain(name);
-    }
+    setCurrentTrain(name);
   };
 
   return (

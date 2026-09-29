@@ -1,0 +1,168 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+
+  --color-primary: #00236f;
+  --color-primary-hover: #172e6f;
+  --color-primary-container: #1e3a8a;
+  --color-on-primary: #ffffff;
+  --color-primary-fixed: #dce1ff;
+
+  --color-secondary: #006c49;
+  --color-secondary-container: #6cf8bb;
+  --color-on-secondary: #ffffff;
+
+  --color-surface: #faf8ff;
+  --color-surface-dim: #d2d9f4;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f2f3ff;
+  --color-surface-container: #eaedff;
+  --color-surface-container-high: #e2e7ff;
+  --color-surface-container-highest: #dae2fd;
+  --color-on-surface: #131b2e;
+  --color-on-surface-variant: #444651;
+
+  --color-outline: #757682;
+  --color-outline-variant: #e2e8f0;
+  
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f8fafc;
+  color: #131b2e;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular numerals for jitter-free clocks & counters */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Subtle modern rail engineering coordinate grid */
+.rail-canvas-grid {
+  background-image: 
+    linear-gradient(to right, rgba(226, 232, 240, 0.6) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(226, 232, 240, 0.6) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Elevated Level 1 Card Shadow */
+.shadow-surface-card {
+  box-shadow: 0px 1px 2px rgba(15, 23, 42, 0.04), 0px 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+/* Interactive Hover Level 2 */
+.shadow-surface-hover {
+  box-shadow: 0px 4px 6px rgba(15, 23, 42, 0.03), 0px 12px 24px rgba(15, 23, 42, 0.06);
+}
+
+/* Custom Google Maps Style Leaflet Overrides */
+.leaflet-popup-content-wrapper {
+  padding: 0 !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.15), 0 8px 10px -6px rgba(15, 23, 42, 0.1) !important;
+  border: 1px solid #E2E8F0 !important;
+  background: #FFFFFF !important;
+  overflow: hidden !important;
+}
+
+.leaflet-popup-content {
+  margin: 0 !important;
+  line-height: 1.4 !important;
+  font-family: var(--font-sans) !important;
+}
+
+.leaflet-popup-tip {
+  background: #FFFFFF !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
+.leaflet-container {
+  font-family: var(--font-sans) !important;
+  background-color: #F5F3E9 !important;
+}
+
+/* Pulse animation for train beacon marker */
+@keyframes beacon-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.train-beacon-aura {
+  animation: beacon-pulse 2s cubic-bezier(0.25, 0.1, 0.25, 1) infinite;
+}
+
+/* Animated railway track stripes for "Where Is My Train" progress bar */
+@keyframes track-crawl {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 28px 0;
+  }
+}
+
+.animate-track-crawl {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.25),
+    rgba(255, 255, 255, 0.25) 7px,
+    transparent 7px,
+    transparent 14px
+  );
+  background-size: 28px 28px;
+  animation: track-crawl 1.2s linear infinite;
+}
+
+@keyframes train-gliding {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.animate-train-gliding {
+  animation: train-gliding 1.6s ease-in-out infinite;
+}
+
+/* Leaflet Custom Pin Container Resets */
+.custom-train-pin {
+  background: transparent !important;
+  border: none !important;
+  overflow: visible !important;
+}
+
+.custom-station-pin {
+  background: transparent !important;
+  border: none !important;
+  overflow: visible !important;
+}
+
+.custom-leading-train-icon {
+  background: transparent !important;
+  border: none !important;
+  overflow: visible !important;
+}

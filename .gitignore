@@ -1,6 +1,8 @@
 node_modules/
 build/
 dist/
+.next/
+*.tsbuildinfo
 coverage/
 .DS_Store
 *.log
@@ -12,3 +14,4 @@ __pycache__/
 .pytest_cache/
 scratch/
 frontend_backup.zip
+*.db

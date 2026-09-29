@@ -157,11 +157,26 @@ export interface ConfidenceBounds {
   confidencePercentage: number;
 }
 
+export interface IntermediateStation {
+  stationCode: string;
+  stationName: string;
+  distanceKm: number;
+  scheduledTime?: string;
+  dynamicTime?: string;
+  status?: string;
+  speedKmph?: number;
+  delayMin?: number;
+  lat?: number;
+  lng?: number;
+}
+
 export interface DestinationEta {
   stationCode: string;
   stationName: string;
   scheduledArrival: string;
+  scheduledArrivalFmt?: string;
   dynamicEta: string;
+  dynamicEtaFmt?: string;
   netDelayMin: number;
   confidence?: ConfidenceBounds;
   waterfall?: WaterfallStep[];
@@ -169,21 +184,58 @@ export interface DestinationEta {
   tsrDelayMin?: number;
   platformHoldMin?: number;
   slackRecoveredMin?: number;
+  platform?: string | number;
+  distanceKm?: number;
+  status?: string;
+  scheduledDeparture?: string;
+  scheduledDepartureFmt?: string;
+  haltMin?: number;
+  intermediateStations?: IntermediateStation[];
+  lat?: number;
+  lng?: number;
 }
 
 export interface TrainPredictionResponse {
   trainNo: string;
   trainName: string;
+  status?: string;
+  trainType?: string;
+  origin?: string;
+  originName?: string;
+  destination?: string;
+  destinationName?: string;
+  scheduledDeparture?: string;
+  scheduledDepartureFmt?: string;
+  scheduledArrival?: string;
+  scheduledArrivalFmt?: string;
+  totalDistanceKm?: number;
+  mps?: number;
   currentKm: number;
   currentSpeedKmph: number;
   currentSection: string;
+  currentStation?: string;
+  currentDelayMin?: number;
   signalAspect: string;
   headwayGapKm: number;
   destinationEta: DestinationEta;
   upcomingStations: DestinationEta[];
+  allStations?: DestinationEta[];
   telemetrySource?: string;
   deadReckonedKm?: number;
+  exactLocationText?: string;
+  currentLat?: number;
+  currentLng?: number;
+  bearing?: number;
+  isLiveGround?: boolean;
+  trackPath?: [number, number][];
+  nearestStation?: string;
+  nextStation?: string;
+  nextStationDistanceKm?: number;
+  leadingTrain?: LeadingTrainState;
+  weatherCondition?: string;
+  signalStatus?: string;
 }
+
 
 export interface InflowTrain {
   id?: string;
@@ -247,161 +299,155 @@ export const api = {
    * Health Check
    */
   async checkHealth(): Promise<{ status: string; service: string }> {
-    try {
-      const res = await fetch('/api/health');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } catch {
-      return { status: 'offline', service: 'RailSync API' };
-    }
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error(`Health check failed: HTTP ${res.status}`);
+    return await res.json();
   },
 
   /**
-   * Get List of Supported Trains
+   * Get List of Supported Trains directly from backend API / Database
    */
   async getTrains(): Promise<TrainOverview[]> {
-    try {
-      const res = await fetch('/api/trains');
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getTrains fallback:', e);
+    const res = await fetch('/api/trains');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to fetch trains list: HTTP ${res.status}`);
     }
-    return [
-      {
-        train_no: '12301',
-        name: 'Howrah – New Delhi Rajdhani Express',
-        type: 'Rajdhani Express',
-        origin: 'HWH',
-        destination: 'NDLS',
-        total_distance_km: 1451,
-        mps: 130,
-        priority: 1,
-      },
-      {
-        train_no: '12004',
-        name: 'New Delhi – Lucknow Swarna Shatabdi Express',
-        type: 'Shatabdi Express',
-        origin: 'NDLS',
-        destination: 'LKO',
-        total_distance_km: 512,
-        mps: 130,
-        priority: 1,
-      },
-      {
-        train_no: '22436',
-        name: 'New Delhi – Varanasi Vande Bharat Express',
-        type: 'Vande Bharat Express',
-        origin: 'NDLS',
-        destination: 'BSB',
-        total_distance_km: 759,
-        mps: 130,
-        priority: 1,
-      },
-    ];
+    return await res.json();
   },
 
   /**
    * Fetch Live Train State (from Database / Replay Engine)
    */
-  async getTrainState(trainNo: string = '12301', runDate?: string, atTime?: string): Promise<TrainStateResponse | null> {
-    try {
-      let url = `/api/train/${encodeURIComponent(trainNo)}/state`;
-      const params = new URLSearchParams();
-      if (runDate) params.append('run_date', runDate);
-      if (atTime) params.append('at', atTime);
-      const qs = params.toString();
-      if (qs) url += `?${qs}`;
-
-      const res = await fetch(url);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getTrainState fallback:', e);
+  async getTrainState(trainNo: string, runDate?: string, atTime?: string): Promise<TrainStateResponse> {
+    if (!trainNo) {
+      throw new Error('trainNo is required to fetch train state');
     }
-    return null;
+    let url = `/api/train/${encodeURIComponent(trainNo)}/state`;
+    const params = new URLSearchParams();
+    if (runDate) params.append('run_date', runDate);
+    if (atTime) params.append('at', atTime);
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to fetch live train state for ${trainNo} (HTTP ${res.status})`);
+    }
+    return await res.json();
   },
 
   /**
    * Fetch Enhanced Neural ETA & Delay Waterfall Breakdown
    */
-  async getEnhancedETA(trainNo: string = '12301'): Promise<EnhancedEtaResponse | null> {
-    try {
-      const res = await fetch(`/api/train/${encodeURIComponent(trainNo)}/enhanced-eta`);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getEnhancedETA fallback:', e);
+  async getEnhancedETA(trainNo: string): Promise<EnhancedEtaResponse> {
+    if (!trainNo) {
+      throw new Error('trainNo is required to fetch enhanced ETA');
     }
-    return null;
+    const res = await fetch(`/api/train/${encodeURIComponent(trainNo)}/enhanced-eta`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to fetch enhanced ETA for ${trainNo} (HTTP ${res.status})`);
+    }
+    return await res.json();
   },
 
   /**
    * Fetch Live Station Operations & Inflow Queue
    */
-  async getInflow(station: string = 'NDLS'): Promise<InflowResponse | null> {
-    try {
-      const res = await fetch(`/api/operations/inflow?station=${encodeURIComponent(station)}`);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getInflow fallback:', e);
+  async getInflow(station: string = 'NDLS'): Promise<InflowResponse> {
+    const res = await fetch(`/api/operations/inflow?station=${encodeURIComponent(station)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to fetch operations inflow for ${station} (HTTP ${res.status})`);
     }
-    return null;
+    return await res.json();
   },
 
   /**
    * Resolve Platform Contention via 2-way RPC
    */
-  async resolveConflict(trainNo: string, targetPlatform: string): Promise<boolean> {
-    try {
-      const res = await fetch('/api/operations/resolve-conflict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          train_no: trainNo,
-          target_platform: targetPlatform,
-        }),
-      });
-      if (res.ok) return true;
-    } catch (e) {
-      console.error('Resolve conflict error:', e);
+  async resolveConflict(trainNo: string, targetPlatform: string, stationCode: string = 'NDLS'): Promise<boolean> {
+    const pfNum = parseInt(targetPlatform.replace(/\D/g, ''), 10) || 16;
+    const res = await fetch('/api/operations/resolve-conflict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        train_no: trainNo,
+        station_code: stationCode,
+        allocated_platform: pfNum,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to resolve conflict for train ${trainNo}`);
     }
-    return false;
+    return true;
   },
 
   /**
    * Fetch Live Incidents (Database Table)
    */
-  async getLiveIncidents(trainNo: string = '12301'): Promise<any> {
-    try {
-      const res = await fetch(`/api/train/${encodeURIComponent(trainNo)}/live-incidents`);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getLiveIncidents fallback:', e);
+  async getLiveIncidents(trainNo: string): Promise<any> {
+    if (!trainNo) {
+      throw new Error('trainNo is required to fetch live incidents');
     }
-    return { detected_incidents: [], reported_incidents: { incidents: [] }, total_incidents: 0 };
+    const res = await fetch(`/api/train/${encodeURIComponent(trainNo)}/live-incidents`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to fetch live incidents for ${trainNo}`);
+    }
+    return await res.json();
   },
 
   /**
    * Fetch RailRadar Live Map (2,400+ India-wide trains)
    */
   async getRailRadarLiveMap(): Promise<any[]> {
-    try {
-      const res = await fetch('/api/railradar/live-map');
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API getRailRadarLiveMap fallback:', e);
+    const res = await fetch('/api/railradar/live-map');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || 'Failed to fetch RailRadar live map');
     }
-    return [];
+    return await res.json();
   },
 
   /**
    * Predict and Analyze ANY Train by Number or Name dynamically from backend ML models
    */
-  async predictTrain(query: string): Promise<TrainPredictionResponse | null> {
-    try {
-      const res = await fetch(`/api/train/predict?query=${encodeURIComponent(query)}`);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.warn('API predictTrain error:', e);
+  async predictTrain(query: string, runDate?: string, apiKey?: string): Promise<TrainPredictionResponse> {
+    if (!query) {
+      throw new Error('Search query is required');
     }
-    return null;
+    const resolvedKey = apiKey || (typeof window !== 'undefined' ? localStorage.getItem('indian_rail_api_key') : null);
+    let url = `/api/train/predict?query=${encodeURIComponent(query)}`;
+    if (runDate) {
+      url += `&run_date=${encodeURIComponent(runDate)}`;
+    }
+    if (resolvedKey) {
+      url += `&api_key=${encodeURIComponent(resolvedKey)}`;
+    }
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to predict train for query "${query}" (HTTP ${res.status})`);
+    }
+    return await res.json();
+  },
+
+  async getTrainPredict(query: string, runDate?: string, apiKey?: string): Promise<TrainPredictionResponse> {
+    return this.predictTrain(query, runDate, apiKey);
+  },
+
+  /**
+   * Fetch Static Corridor Waypoints & Stations
+   */
+  async getCorridor(): Promise<any> {
+    const res = await fetch('/api/corridor');
+    if (!res.ok) {
+      throw new Error(`Failed to fetch corridor data: HTTP ${res.status}`);
+    }
+    return await res.json();
   },
 };

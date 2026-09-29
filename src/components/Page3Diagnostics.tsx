@@ -17,6 +17,7 @@ import { api, EnhancedEtaResponse, TrainStateResponse } from '../services/api';
 
 interface Page3DiagnosticsProps {
   trainName: string;
+  runDate?: string;
   isRerouted: boolean;
   onNavigateToPage2: () => void;
   onNavigateToPage4: () => void;
@@ -24,6 +25,7 @@ interface Page3DiagnosticsProps {
 
 export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
   trainName,
+  runDate,
   isRerouted,
   onNavigateToPage2,
   onNavigateToPage4,
@@ -32,26 +34,25 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
   const [liveData, setLiveData] = useState<TrainStateResponse | null>(null);
   const [predictData, setPredictData] = useState<any | null>(null);
 
-  const trainNoMatch = trainName.match(/\b\d{5}\b/);
-  const trainNo = trainNoMatch ? trainNoMatch[0] : '12301';
+  const trainNoMatch = (trainName || '').match(/\b\d{5}\b/);
+  const trainNo = trainNoMatch ? trainNoMatch[0] : (trainName?.trim() || '12301');
 
   useEffect(() => {
     let isMounted = true;
-    Promise.all([
+    Promise.allSettled([
       api.getEnhancedETA(trainNo),
-      api.getTrainState(trainNo),
-      api.predictTrain(trainNo),
-    ]).then(([eta, state, pred]) => {
-      if (isMounted) {
-        if (eta) setEnhancedData(eta);
-        if (state) setLiveData(state);
-        if (pred) setPredictData(pred);
-      }
+      api.getTrainState(trainNo, runDate),
+      api.getTrainPredict(trainNo, runDate),
+    ]).then(([etaRes, stateRes, predRes]) => {
+      if (!isMounted) return;
+      if (etaRes.status === 'fulfilled' && etaRes.value) setEnhancedData(etaRes.value);
+      if (stateRes.status === 'fulfilled' && stateRes.value) setLiveData(stateRes.value);
+      if (predRes.status === 'fulfilled' && predRes.value) setPredictData(predRes.value);
     });
     return () => {
       isMounted = false;
     };
-  }, [trainNo, isRerouted]);
+  }, [trainNo, isRerouted, runDate]);
 
   // Derived display strings (100% real data from API)
   const displayName = predictData?.trainName
@@ -62,19 +63,15 @@ export const Page3Diagnostics: React.FC<Page3DiagnosticsProps> = ({
     ? `${liveData.train_no} / ${liveData.train_name}`
     : trainName || `${trainNo} Express`;
 
-  const scheduledTime = predictData?.destinationEta?.scheduledArrival
-    ? new Date(predictData.destinationEta.scheduledArrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : liveData?.upcomingStations?.slice(-1)[0]?.etaScheduleFmt
-    ? liveData.upcomingStations.slice(-1)[0].etaScheduleFmt
-    : '--:--';
+  const scheduledTime = predictData?.destinationEta?.scheduledArrivalFmt
+    || (predictData?.destinationEta?.scheduledArrival ? predictData.destinationEta.scheduledArrival.slice(11, 16) : null)
+    || liveData?.upcomingStations?.slice(-1)[0]?.etaScheduleFmt
+    || '--:--';
 
-  const dynamicEta = predictData?.destinationEta?.dynamicEta
-    ? new Date(predictData.destinationEta.dynamicEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : liveData?.upcomingStations?.slice(-1)[0]?.etaPredictedFmt
-    ? liveData.upcomingStations.slice(-1)[0].etaPredictedFmt
-    : isRerouted
-    ? '10:06 AM'
-    : '10:15 AM';
+  const dynamicEta = predictData?.destinationEta?.dynamicEtaFmt
+    || (predictData?.destinationEta?.dynamicEta ? predictData.destinationEta.dynamicEta.slice(11, 16) : null)
+    || liveData?.upcomingStations?.slice(-1)[0]?.etaPredictedFmt
+    || '--:--';
 
   const destinationStation = predictData?.destinationEta?.stationName 
     || liveData?.upcomingStations?.slice(-1)[0]?.name 

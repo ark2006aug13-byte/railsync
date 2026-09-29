@@ -41,11 +41,26 @@ class ConfidenceBounds(CamelModel):
     confidence_percentage: int
 
 
+class IntermediateStation(CamelModel):
+    station_code: str
+    station_name: str
+    distance_km: float
+    scheduled_time: Optional[str] = "--:--"
+    dynamic_time: Optional[str] = "--:--"
+    status: Optional[str] = "UPCOMING"
+    speed_kmph: Optional[float] = None
+    delay_min: Optional[float] = 0.0
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
 class StationETABreakdown(CamelModel):
     station_code: str
     station_name: str
     scheduled_arrival: str
+    scheduled_arrival_fmt: Optional[str] = None
     dynamic_eta: str
+    dynamic_eta_fmt: Optional[str] = None
     net_delay_min: float
     confidence: ConfidenceBounds
     waterfall: List[WaterfallStep]
@@ -53,20 +68,68 @@ class StationETABreakdown(CamelModel):
     tsr_delay_min: Optional[float] = 0.0
     platform_hold_min: Optional[float] = 0.0
     slack_recovered_min: Optional[float] = 0.0
+    platform: Optional[Union[int, str]] = "1"
+    distance_km: Optional[float] = 0.0
+    status: Optional[str] = "UPCOMING"
+    scheduled_departure: Optional[str] = None
+    scheduled_departure_fmt: Optional[str] = None
+    halt_min: Optional[float] = 0.0
+    intermediate_stations: Optional[List[IntermediateStation]] = []
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+class LeadingTrainModel(CamelModel):
+    train_no: str
+    name: str
+    km: float
+    lat: float
+    lng: float
+    speed_kmph: float
+    delay_min: float
+    headway_gap_km: float
 
 
 class TrainPredictionResponse(CamelModel):
     train_no: str
     train_name: str
+    status: Optional[str] = "RUNNING"
+    train_type: Optional[str] = "Superfast Express"
+    origin: Optional[str] = None
+    origin_name: Optional[str] = None
+    destination: Optional[str] = None
+    destination_name: Optional[str] = None
+    scheduled_departure: Optional[str] = None
+    scheduled_departure_fmt: Optional[str] = None
+    scheduled_arrival: Optional[str] = None
+    scheduled_arrival_fmt: Optional[str] = None
+    total_distance_km: Optional[float] = None
+    mps: Optional[float] = 130.0
     current_km: float
     current_speed_kmph: float
     current_section: str
+    current_station: Optional[str] = None
+    current_delay_min: Optional[float] = 0.0
     signal_aspect: str
     headway_gap_km: float
     destination_eta: StationETABreakdown
     upcoming_stations: List[StationETABreakdown]
-    telemetry_source: Optional[str] = "RTIS_HIGH_PRECISION_GPS (ISRO Satellite)"
+    all_stations: Optional[List[StationETABreakdown]] = []
+    telemetry_source: Optional[str] = "RTIS_HIGH_PRECISION_GPS (ISRO Satellite Stream)"
     dead_reckoned_km: Optional[float] = None
+    exact_location_text: Optional[str] = None
+    current_lat: Optional[float] = None
+    current_lng: Optional[float] = None
+    bearing: Optional[float] = None
+    is_live_ground: Optional[bool] = False
+    track_path: Optional[List[List[float]]] = []
+    nearest_station: Optional[str] = None
+    next_station: Optional[str] = None
+    next_station_distance_km: Optional[float] = None
+    leading_train: Optional[LeadingTrainModel] = None
+    weather_condition: Optional[str] = None
+    signal_status: Optional[str] = None
+
 
 
 # ---------------------------------------------------------------------------
@@ -152,16 +215,6 @@ class ActiveSectionModel(CamelModel):
     current_delay_min: float
     current_mps: float
 
-
-class LeadingTrainModel(CamelModel):
-    train_no: str
-    name: str
-    km: float
-    lat: float
-    lng: float
-    speed_kmph: float
-    delay_min: float
-    headway_gap_km: float
 
 
 class SignalAspectModel(CamelModel):

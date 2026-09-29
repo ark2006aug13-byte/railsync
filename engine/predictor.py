@@ -22,7 +22,10 @@ import math
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
 import joblib
-import lightgbm as lgb
+try:
+    import lightgbm as lgb
+except (ImportError, OSError, Exception):
+    lgb = None
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -51,6 +54,7 @@ from ml.baseline_model import PhysicsBaselineModel
 from engine.weather_engine import WeatherEngine, weather_engine
 from models.network_state import TrainPosition, SectionOccupancy, NetworkState
 from engine.network_tracker import NetworkTracker
+from engine.train_registry import TRAIN_PROFILES, resolve_train_profile
 
 
 class DynamicETAPredictor:
@@ -80,7 +84,7 @@ class DynamicETAPredictor:
         encoder_path = ARTIFACTS_DIR / "section_encoder.joblib"
         meta_path = ARTIFACTS_DIR / "feature_metadata.json"
 
-        if booster_path.exists() and encoder_path.exists() and meta_path.exists():
+        if lgb is not None and booster_path.exists() and encoder_path.exists() and meta_path.exists():
             try:
                 self.booster = lgb.Booster(model_file=str(booster_path))
                 self.le_section = joblib.load(encoder_path)
@@ -703,12 +707,17 @@ class DynamicETAPredictor:
         current_speed_kmph: float = 110.0,
         leading_train_context: Optional[Dict[str, Any]] = None,
         fog_override: Optional[bool] = None,
-        resolved_conflicts: Optional[Dict[str, Any]] = None
+        resolved_conflicts: Optional[Dict[str, Any]] = None,
+        route_stations: Optional[List[Dict[str, Any]]] = None,
+        sched_dep_dt: Optional[datetime] = None,
+        origin_code: Optional[str] = None,
+        dest_code: Optional[str] = None
     ) -> Tuple[StationETABreakdown, List[StationETABreakdown], List[str]]:
         """
         Executes the full multi-factor dynamic ETA evaluation pipeline and builds
         the 5-step explainable waterfall decomposition where:
         Net Delay = T_fog + T_sig + T_platform + T_throat - T_recovery.
+        Dynamically adapts to ANY train route across Indian Railways.
         """
         dt_run = datetime.strptime(run_date, "%Y-%m-%d")
         month = dt_run.month
@@ -735,12 +744,31 @@ class DynamicETAPredictor:
         )
         sig_desc = f"{aspect_badge} aspect ({headway_gap_km:.1f} km headway to Train {LEADING_TRAIN_CONFIG['train_no']})"
 
-        if train_no == "12367":
-            sched_dep_dt = dt_run.replace(hour=12, minute=0, second=0)
-        elif train_no == "15657":
-            sched_dep_dt = dt_run.replace(hour=23, minute=40, second=0)
+        # Resolve active stations for this train
+        if route_stations is not None and len(route_stations) > 0:
+            active_stations = route_stations
+        elif train_no in TRAIN_PROFILES:
+            active_stations = TRAIN_PROFILES[train_no]["stations"]
         else:
-            sched_dep_dt = dt_run.replace(hour=16, minute=50, second=0)
+            prof = resolve_train_profile(train_no)
+            active_stations = prof.get("stations", STATIONS)
+
+        # Resolve scheduled departure datetime
+        if sched_dep_dt is None:
+            dep_hour, dep_minute = 16, 50
+            if train_no in TRAIN_PROFILES:
+                t_str = TRAIN_PROFILES[train_no].get("scheduled_departure", "16:50")
+                try:
+                    parts = t_str.split(":")
+                    dep_hour, dep_minute = int(parts[0]), int(parts[1])
+                except Exception:
+                    dep_hour, dep_minute = 16, 50
+            elif train_no == "12367":
+                dep_hour, dep_minute = 12, 0
+            elif train_no == "15657":
+                dep_hour, dep_minute = 23, 40
+            sched_dep_dt = dt_run.replace(hour=dep_hour, minute=dep_minute, second=0)
+
         upcoming_breakdowns: List[StationETABreakdown] = []
         global_warnings: List[str] = []
 
@@ -754,105 +782,113 @@ class DynamicETAPredictor:
             global_warnings.append(f"TSR {tsr['speed_cap_kmph']:.0f} km/h active KM {tsr['start_km']:.0f}-{tsr['end_km']:.0f} ({tsr['reason']}).")
 
         # Find upcoming stations downstream of current_km
-        downstream_stations = [s for s in STATIONS if s["km"] > current_km]
+        downstream_stations = [s for s in active_stations if s.get("km", 0.0) > current_km]
         if not downstream_stations:
-            downstream_stations = [STATIONS[-1]]
+            downstream_stations = [active_stations[-1]]
 
-        total_corridor_span = max(1.0, STATIONS[-1]["km"] - current_km)
+        total_corridor_span = max(1.0, active_stations[-1].get("km", 1451.0) - current_km)
 
         for i, to_stn in enumerate(downstream_stations):
-            dist_to_stn = to_stn["km"] - current_km
+            stn_code = to_stn.get("code", "STN")
+            stn_name = to_stn.get("name", stn_code)
+            stn_pf = str(to_stn.get("platform", "1"))
+            stn_km = float(to_stn.get("km", 0.0))
+            stn_halt = float(to_stn.get("halt_min", 2.0))
+            dist_to_stn = max(0.1, stn_km - current_km)
             progress_ratio = max(0.1, min(1.0, dist_to_stn / total_corridor_span))
+            is_terminal = (to_stn == downstream_stations[-1] or (dest_code and stn_code == dest_code))
 
-            # Station code & naming (For Train 12367: ANVT, Train 15657: KYQ)
-            is_terminal = (to_stn["code"] == "NDLS" or to_stn == downstream_stations[-1])
-            if train_no == "12367" and is_terminal:
-                stn_code = "ANVT"
-                stn_name = "Anand Vihar Terminal"
-                sched_arr_offset = 1160  # 19h 20m from BGP departure (12:00 -> 07:20 next day)
-            elif train_no == "15657" and is_terminal:
-                stn_code = "KYQ"
-                stn_name = "Kamakhya Jn"
-                sched_arr_offset = 2265  # 37h 45m from DLI departure (23:40 -> 13:25 Day 3)
+            # Scheduled arrival offset
+            if "arr_min" in to_stn and to_stn["arr_min"] is not None:
+                sched_arr_offset = int(to_stn["arr_min"])
+            elif train_no == "12301" and stn_code in SCHEDULED_TIMELINE:
+                sched_arr_offset = SCHEDULED_TIMELINE[stn_code]["arr_min"]
             else:
-                stn_code = to_stn["code"]
-                stn_name = to_stn["name"]
-                sched_arr_offset = SCHEDULED_TIMELINE[to_stn["code"]]["arr_min"]
+                sched_arr_offset = round((stn_km / max(80.0, current_speed_kmph)) * 60.0)
+
+            # Scheduled departure offset
+            if "dep_min" in to_stn and to_stn["dep_min"] is not None:
+                sched_dep_offset = int(to_stn["dep_min"])
+            elif train_no == "12301" and stn_code in SCHEDULED_TIMELINE:
+                sched_dep_offset = SCHEDULED_TIMELINE[stn_code]["dep_min"]
+            else:
+                sched_dep_offset = sched_arr_offset + int(stn_halt)
 
             # 1. Weather / Fog Penalty (T_fog)
-            if is_fog and to_stn["km"] > 500.0:
-                fog_overlap = min(1400.0, to_stn["km"]) - max(500.0, current_km)
-                if fog_overlap > 0:
-                    t_fog = round((fog_overlap / 900.0) * 45.0, 1)
-                    fog_desc = f"Dense Fog Belt (KM 500-1400): Speed clamped to 60 km/h in visibility < 300m (+{t_fog:.1f}m)"
-                else:
-                    t_fog = 0.0
-                    fog_desc = "Outside Gangetic fog belt (Clear)"
+            stn_lat = to_stn.get("lat", 26.0)
+            stn_lng = to_stn.get("lng", 82.0)
+            in_fog_lat_lon = (23.5 <= stn_lat <= 29.0 and 76.5 <= stn_lng <= 88.0)
+            if is_fog and (in_fog_lat_lon or stn_km > 500.0):
+                t_fog = round(min(45.0, 15.0 + 30.0 * progress_ratio), 1)
+                fog_desc = f"Dense Gangetic Fog Belt: Speed clamped to 60 km/h in visibility < 300m (+{t_fog:.1f}m)"
             else:
-                # Query WeatherEngine for real-time section weather conditions
-                w_data = weather_engine.get_weather_for_section_sync([{"lat": to_stn["lat"], "lon": to_stn["lng"]}])
+                w_data = weather_engine.get_weather_for_section_sync([{"lat": stn_lat, "lon": stn_lng}])
                 w_penalty = weather_engine.calculate_weather_penalty(w_data, dist_to_stn)
-                t_fog = w_penalty["total_weather_delay"]
+                t_fog = round(w_penalty.get("total_weather_delay", 0.0), 1)
                 if t_fog > 0.0:
-                    factor = w_penalty["primary_factor"].upper()
-                    fog_desc = f"Weather Impact ({factor}): {w_data.get('description', 'Adverse weather')} (+{t_fog:.1f}m)"
+                    factor = w_penalty.get("primary_factor", "weather").upper()
+                    fog_desc = f"Weather Impact ({factor}): {w_data.get('description', 'Adverse atmospheric conditions')} (+{t_fog:.1f}m)"
                 else:
-                    fog_desc = f"Clear weather running ({w_data.get('description', 'No atmospheric restrictions')})"
+                    fog_desc = f"Clear weather running ({w_data.get('description', 'Optimal atmospheric conditions')})"
 
-            # 2. Signaling, Headway & Divisional TSR Caution (T_caution = T_sig + T_tsr)
-            t_tsr, tsr_descs = self.compute_tsr_penalties(current_km, to_stn["km"], section_mps=current_speed_kmph)
+            # 2. Signaling, Headway & TSR Caution
+            t_tsr, tsr_descs = self.compute_tsr_penalties(current_km, stn_km, section_mps=current_speed_kmph)
             t_caution = round(t_sig + t_tsr, 1)
             if t_tsr > 0:
                 caution_desc = f"{sig_desc} | Active Caution Orders (+{t_tsr:.1f}m): " + "; ".join(tsr_descs[:2])
             else:
                 caution_desc = sig_desc
 
-            # 3. Terminal Junction Throat Friction (T_throat)
-            t_throat, throat_desc = self.compute_terminal_throat_friction(current_km, to_stn["km"], stn_code)
+            # 3. Terminal Junction Throat Friction
+            t_throat, throat_desc = self.compute_terminal_throat_friction(current_km, stn_km, stn_code)
             if throat_desc is None:
                 if is_terminal:
-                    t_throat = 4.0
-                    throat_desc = f"{stn_code} Terminal Throat: Diamond crossings and points interlocking restricted to 25 km/h (+4.0m)"
+                    t_throat = 3.5
+                    throat_desc = f"{stn_code} Terminal Throat: Diamond crossings and interlocking speed restricted to 25 km/h (+3.5m)"
                 else:
                     t_throat = 0.0
                     throat_desc = "Standard sectional interlocking (no terminal throat friction)"
 
-            # 4. Platform Contention & Outer Signal Holding (T_platform)
-            conflict_key = f"{train_no}:{to_stn['code']}"
+            # 4. Platform Contention & Outer Holding
+            conflict_key = f"{train_no}:{stn_code}"
             is_resolved = False
-            alloc_pf = to_stn.get("platform", 12)
+            alloc_pf = stn_pf
             if resolved_conflicts and conflict_key in resolved_conflicts:
                 res_pf = resolved_conflicts[conflict_key].get("allocated_platform")
-                if res_pf and res_pf != 12:
+                if res_pf:
                     is_resolved = True
-                    alloc_pf = res_pf
+                    alloc_pf = str(res_pf)
 
             if is_terminal:
                 if is_resolved:
                     t_platform = 0.0
                     platform_desc = f"Platform conflict resolved: Train {train_no} reallocated to Platform {alloc_pf} (clear berth approach, 0.0m hold)"
-                elif train_no in ["12367", "15657"]:
-                    t_platform = 0.0
-                    platform_desc = f"Platform at {stn_name} assigned (clear berth approach, 0.0m hold)"
-                else:
+                elif train_no in ["12301", "12302"] and stn_code == "NDLS":
                     t_platform = 10.0
-                    platform_desc = f"Platform 12 occupied by Train {LEADING_TRAIN_CONFIG['train_no']} ({LEADING_TRAIN_CONFIG['name']}): +10.0m outer home signal holding"
+                    platform_desc = f"Platform {alloc_pf} occupied by Train {LEADING_TRAIN_CONFIG['train_no']} ({LEADING_TRAIN_CONFIG['name']}): +10.0m outer home signal holding"
+                else:
+                    t_platform = 0.0
+                    platform_desc = f"Platform {alloc_pf} assigned (clear berth approach, 0.0m hold)"
             else:
                 t_platform = 0.0
-                platform_desc = "Assigned platform clear for direct berth entry (0.0m hold)"
+                platform_desc = f"Platform {alloc_pf} clear for direct berth entry (0.0m hold)"
 
-            # 5. Line Speed (130 km/h) Slack Recovery (T_recovery)
+            # 5. Line Speed Slack Recovery (Time Deletion)
             if train_no == "12367":
                 t_recovery = round(min(35.0, 10.0 + 25.0 * progress_ratio), 1)
-                recovery_desc = f"Time deletion: {t_recovery:.1f}m recovered at 130 km/h line speed against CNB-ANVT non-stop slack buffer"
+                recovery_desc = f"Time deletion: {t_recovery:.1f}m recovered at 130 km/h line speed against scheduled timetable slack buffer"
             elif train_no == "15657":
                 t_recovery = round(min(22.0, 6.0 + 16.0 * progress_ratio), 1)
                 recovery_desc = f"Time deletion: {t_recovery:.1f}m recovered at line speed against scheduled timetable slack buffer"
+            elif train_no in ["12004", "22436", "12951", "12952", "12002"]:
+                max_rec = 18.0 if train_no == "12004" else 25.0
+                t_recovery = round(min(max_rec, (current_delay_min * 0.6) * progress_ratio + 4.0 * progress_ratio), 1)
+                recovery_desc = f"Time deletion: {t_recovery:.1f}m recovered at 130 km/h line speed against sectional timetable slack buffer"
             else:
-                sec_id = f"CNB-NDLS" if to_stn["code"] == "NDLS" else None
+                sec_id = f"CNB-NDLS" if stn_code == "NDLS" else None
                 t_rec_raw = self.compute_slack_recovery(
                     scheduled_runtime_min=sched_arr_offset,
-                    pure_runtime_min=sched_arr_offset - 15.0,
+                    pure_runtime_min=max(10.0, sched_arr_offset - 15.0),
                     current_delay_min=max(8.5, current_delay_min),
                     signal_aspect=aspect,
                     section_id=sec_id,
@@ -862,13 +898,15 @@ class DynamicETAPredictor:
                 recovery_desc = f"Time deletion: {t_recovery:.1f}m recovered at {current_speed_kmph:.0f} km/h line speed against timetable slack buffer"
 
             # 6. Exact Mathematical Waterfall Balance
-            # Net Delay = T_fog + T_caution + T_platform + T_throat - T_recovery
-            net_delay_min = round(t_fog + t_caution + t_platform + t_throat - t_recovery, 1)
+            t_penalties = round(t_fog + t_caution + t_platform + t_throat, 1)
+            t_recovery = min(t_recovery, t_penalties)
+            net_delay_min = round(t_penalties - t_recovery, 1)
 
-            # Target Scheduled Arrival
+            # Target Scheduled Arrival and Departure
             sched_arr_dt = sched_dep_dt + timedelta(minutes=sched_arr_offset)
+            sched_dep_stn_dt = sched_dep_dt + timedelta(minutes=sched_dep_offset)
 
-            # Dynamic ETA = Scheduled Arrival + Net Delay
+            # Dynamic ETA
             dynamic_eta_dt = sched_arr_dt + timedelta(minutes=net_delay_min)
 
             # Build 5-step Waterfall
@@ -910,7 +948,7 @@ class DynamicETAPredictor:
                 elapsed_min=max(10.0, net_delay_min),
                 distance_km=dist_to_stn,
                 prev_error_min=3.5,
-                outer_holding_possible=(is_terminal and not is_resolved and train_no != "12367")
+                outer_holding_possible=(is_terminal and not is_resolved and train_no in ["12301", "12302"])
             )
 
             stn_warnings = []
@@ -927,14 +965,24 @@ class DynamicETAPredictor:
                 station_code=stn_code,
                 station_name=stn_name,
                 scheduled_arrival=sched_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                scheduled_arrival_fmt=sched_arr_dt.strftime("%H:%M"),
                 dynamic_eta=dynamic_eta_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                dynamic_eta_fmt=dynamic_eta_dt.strftime("%H:%M"),
                 net_delay_min=net_delay_min,
                 confidence=conf_bounds,
                 waterfall=waterfall,
                 active_warnings=stn_warnings,
                 tsr_delay_min=t_tsr,
                 platform_hold_min=t_platform,
-                slack_recovered_min=t_recovery
+                slack_recovered_min=t_recovery,
+                platform=alloc_pf,
+                distance_km=stn_km,
+                status="UPCOMING",
+                scheduled_departure=sched_dep_stn_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                scheduled_departure_fmt=sched_dep_stn_dt.strftime("%H:%M"),
+                halt_min=stn_halt,
+                lat=stn_lat,
+                lng=stn_lng
             )
             upcoming_breakdowns.append(breakdown)
 
@@ -1054,7 +1102,10 @@ class DynamicETAPredictor:
             cur_delay = 10.0
             cur_speed = 100.0
 
-        dest_breakdown, upcoming_breakdowns, global_warnings = self.predict_multi_factor(
+        from starlette.concurrency import run_in_threadpool
+
+        dest_breakdown, upcoming_breakdowns, global_warnings = await run_in_threadpool(
+            self.predict_multi_factor,
             train_no=train_number,
             current_km=current_km,
             current_time=now,
