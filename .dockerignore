@@ -1,0 +1,27 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+__pycache__
+*.py[cod]
+
+# Build outputs
+.next
+dist
+build
+*.tsbuildinfo
+
+# Environment and sensitive keys
+.env*.local
+.env
+.coverage
+.pytest_cache
+htmlcov
+scratch
+*.log
+
+# Misc
+*.zip
+*.pdf

@@ -1,0 +1,86 @@
+name: RailSync Continuous Integration & Delivery (CI/CD)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ============================================================================
+  # 1. Backend Verification & Pytest Suite
+  # ============================================================================
+  backend-test:
+    name: Backend Pytest Suite & Kinematics Engine
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pytest Test Suite (71 Unit & Integration Tests)
+        run: |
+          python -m pytest tests/ -v --durations=10
+
+  # ============================================================================
+  # 2. Frontend TypeScript & Next.js Build
+  # ============================================================================
+  frontend-build:
+    name: Frontend TypeScript & Next.js Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: TypeScript Static Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build Next.js Production Bundle
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+  # ============================================================================
+  # 3. Docker Compose & Container Verification
+  # ============================================================================
+  docker-build:
+    name: Container Build & Docker Verification
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-build]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Compose Configuration
+        run: docker compose config
+
+      - name: Build Backend Container Image
+        run: docker build -t railsync-backend:latest -f docker/Dockerfile.backend .
+
+      - name: Build Frontend Container Image
+        run: docker build -t railsync-frontend:latest -f docker/Dockerfile.frontend .

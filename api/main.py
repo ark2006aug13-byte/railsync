@@ -46,6 +46,7 @@ from engine.train_registry import (
     get_intermediate_passing_stations,
     resolve_station_coordinates,
 )
+from engine.cache_manager import cache_manager
 
 # ---------------------------------------------------------------------------
 # Import Pydantic Schemas from api.schemas
@@ -373,13 +374,11 @@ def search_train_predict(
     Computes real-time dynamic arrival predictions with P10/P50/P90 confidence
     bounds and explainable multi-factor waterfall decomposition for searched train.
     """
-    now_ts = time.time()
     clean_api_key = api_key if isinstance(api_key, str) else None
-    cache_key = f"{query.strip().lower()}:{run_date}:{at}:{fog}:{clean_api_key}"
-    if cache_key in _API_PREDICT_CACHE:
-        cached_ts, cached_resp = _API_PREDICT_CACHE[cache_key]
-        if now_ts - cached_ts < 30.0:
-            return cached_resp
+    cache_key = f"train:predict:{query.strip().lower()}:{run_date}:{at}:{fog}:{clean_api_key}"
+    cached_resp = cache_manager.get(cache_key)
+    if cached_resp:
+        return cached_resp
 
     resolved_api_key = clean_api_key or os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
     profile = resolve_train_profile(query, api_key=resolved_api_key)
@@ -941,8 +940,21 @@ def search_train_predict(
         weather_condition=weather_cond_str,
         signal_status=sig_status_str
     )
-    _API_PREDICT_CACHE[cache_key] = (now_ts, resp)
+    cache_manager.set(cache_key, resp, ttl_seconds=30)
     return resp
+
+
+@app.get("/api/cache/stats")
+def get_cache_stats():
+    """Returns telemetry statistics for the hybrid caching layer (Redis / In-Memory)."""
+    return cache_manager.get_stats()
+
+
+@app.post("/api/cache/clear")
+def clear_cache():
+    """Flushes active cache entries."""
+    cache_manager.clear()
+    return {"status": "ok", "message": "Cache successfully cleared"}
 
 
 
@@ -1497,7 +1509,7 @@ def resolve_conflict(req: ResolveConflictRequest):
         "allocated_platform": req.allocated_platform,
         "resolved_at": datetime.utcnow().isoformat()
     }
-    _API_PREDICT_CACHE.clear()
+    cache_manager.clear()
     return ResolveConflictResponse(
         success=True,
         train_no=req.train_no,
