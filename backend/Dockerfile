@@ -4,32 +4,31 @@
 
 FROM python:3.10-slim AS base
 
-# Prevent Python from writing .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000
 
 WORKDIR /app
 
-# Install system dependencies needed for compiling native packages and healthcheck
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
-COPY requirements.txt /app/requirements.txt
+COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source directories and configs
-COPY api/ /app/api/
-COPY engine/ /app/engine/
-COPY ml/ /app/ml/
-COPY models/ /app/models/
-COPY data/ /app/data/
-COPY config.py /app/config.py
-COPY cli.py /app/cli.py
+COPY backend/api/ /app/api/
+COPY backend/engine/ /app/engine/
+COPY backend/ml/ /app/ml/
+COPY backend/models/ /app/models/
+COPY backend/config.py /app/config.py
+COPY backend/cli.py /app/cli.py
+COPY database/data/ /app/database/data/
 
 # Create non-privileged user for container security
 RUN addgroup --system --gid 1001 appgroup && \

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+DATABASE_DIR = BASE_DIR.parent / "database"
+DATA_DIR = (DATABASE_DIR / "data") if (DATABASE_DIR / "data").exists() else (BASE_DIR / "data")
 DB_PATH = DATA_DIR / "train_history.db"
 ML_DIR = BASE_DIR / "ml"
 ARTIFACTS_DIR = ML_DIR / "artifacts"

@@ -413,11 +413,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load authentic stations coordinates database
 _STATIONS_GEO: Dict[str, Dict[str, Any]] = {}
-try:
-    with open(BASE_DIR / "data" / "stations_geo.json", "r", encoding="utf-8") as f:
-        _STATIONS_GEO = json.load(f)
-except Exception:
-    pass
+for _candidate_path in [
+    BASE_DIR.parent / "database" / "data" / "stations_geo.json",
+    BASE_DIR / "data" / "stations_geo.json",
+    BASE_DIR.parent / "data" / "stations_geo.json",
+]:
+    if _candidate_path.exists():
+        try:
+            with open(_candidate_path, "r", encoding="utf-8") as f:
+                _STATIONS_GEO = json.load(f)
+            break
+        except Exception:
+            pass
 
 # Known Indian Railways station renaming aliases & missing coordinates
 STATION_ALIASES: Dict[str, Any] = {

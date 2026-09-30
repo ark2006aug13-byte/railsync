@@ -116,17 +116,28 @@ import time
 STATIONS_GEO: Dict[str, Dict[str, Any]] = {}
 TRAIN_TRACKS: Dict[str, List[List[float]]] = {}
 
-try:
-    with open(BASE_DIR / "data" / "stations_geo.json", "r", encoding="utf-8") as f:
-        STATIONS_GEO = json.load(f)
-except Exception as e:
-    print(f"[Warning] Could not load data/stations_geo.json: {e}")
+def _resolve_data_path(filename: str) -> Path:
+    candidates = [
+        BASE_DIR.parent / "database" / "data" / filename,
+        BASE_DIR / "data" / filename,
+        BASE_DIR.parent / "data" / filename,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
 
 try:
-    with open(BASE_DIR / "data" / "train_tracks.json", "r", encoding="utf-8") as f:
+    with open(_resolve_data_path("stations_geo.json"), "r", encoding="utf-8") as f:
+        STATIONS_GEO = json.load(f)
+except Exception as e:
+    print(f"[Warning] Could not load stations_geo.json: {e}")
+
+try:
+    with open(_resolve_data_path("train_tracks.json"), "r", encoding="utf-8") as f:
         TRAIN_TRACKS = json.load(f)
 except Exception as e:
-    print(f"[Warning] Could not load data/train_tracks.json: {e}")
+    print(f"[Warning] Could not load train_tracks.json: {e}")
 
 _LIVE_MAP_CACHE = {"timestamp": 0.0, "data": []}
 
