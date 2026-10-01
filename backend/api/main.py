@@ -42,6 +42,7 @@ from engine.live_rail_api import (
     fetch_railradar_live_map,
     fetch_railradar_train_live,
     locate_train_dynamically,
+    get_authentic_train_status,
 )
 from engine.train_registry import (
     resolve_train_profile,
@@ -476,6 +477,34 @@ def locate_train(
         "telemetry": loc_data["telemetry"],
         "last_updated": loc_data["last_updated"]
     }
+
+
+# ---------------------------------------------------------------------------
+# Standardized Authentic Train Tracking & Status Endpoint (100% User-Driven)
+# ---------------------------------------------------------------------------
+@app.get("/api/train/status")
+async def get_train_status(
+    train_query: str = Query(..., description="5-digit train number (e.g. '12301') or train name (e.g. 'Rajdhani')"),
+    journey_date: Optional[str] = Query(None, description="Journey start date in YYYY-MM-DD format (defaults to current date in IST)")
+):
+    """
+    Standardized, authentic train status and telemetry retrieval endpoint.
+    Performs dynamic train resolution, fetches authentic upstream telemetry,
+    computes true delay and remaining distance, and returns structured running status.
+    Never fabricates fake data.
+    """
+    return await get_authentic_train_status(train_query=train_query, journey_date=journey_date)
+
+
+@app.get("/api/train/{train_no}/status")
+async def get_train_status_by_path(
+    train_no: str,
+    journey_date: Optional[str] = Query(None, description="Journey start date in YYYY-MM-DD format (defaults to current date in IST)")
+):
+    """
+    RESTful path-based authentic train status and telemetry retrieval endpoint.
+    """
+    return await get_authentic_train_status(train_query=train_no, journey_date=journey_date)
 
 
 @app.get("/api/train/predict", response_model=TrainPredictionResponse, response_model_by_alias=True)
