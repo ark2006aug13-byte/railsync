@@ -159,12 +159,27 @@ def run_terminal_analysis(train_query: str, journey_date: str, api_key: str = No
     dest = t_info.get("destination", "Destination")
     mps = t_info.get("mps", 110)
     priority = t_info.get("priority", 2)
-    clean_d = journey_date.replace("-", "").strip() if journey_date else datetime.now().strftime("%Y%m%d")
+    dist_km = float(t_info.get("distance_km", 1450.0))
+    
+    # Strictly parse and anchor the user's journey date
+    raw_date = journey_date if journey_date else datetime.now().strftime("%Y-%m-%d")
+    parsed_base_dt = None
+    for fmt in ["%Y-%m-%d", "%Y%m%d", "%d-%m-%Y", "%d/%m/%Y"]:
+        try:
+            parsed_base_dt = datetime.strptime(raw_date.strip(), fmt)
+            break
+        except ValueError:
+            pass
+    if not parsed_base_dt:
+        parsed_base_dt = datetime.now()
+    clean_date_str = parsed_base_dt.strftime("%Y-%m-%d")
+    clean_d = parsed_base_dt.strftime("%Y%m%d")
+
     resolved_api_key = api_key or os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
     live_success = False
 
     print(f"\n{GREEN}[CONNECTING TO OFFICIAL INDIAN RAILWAYS LIVE SATELLITE & NTES FEED...]{RESET}")
-    print(f"  Contacting live railway network for Train {train_no} ({journey_date})...")
+    print(f"  Contacting live railway network for Train {train_no} ({clean_date_str})...")
     live_payload = None
     try:
         live_payload = fetch_real_railway_data(train_no, clean_d, resolved_api_key)
@@ -179,19 +194,19 @@ def run_terminal_analysis(train_query: str, journey_date: str, api_key: str = No
 
     print(f"\n{CYAN}========================================================================================{RESET}")
     print(f"{BOLD}TRAIN SPECIFICATION :{RESET} {train_no} - {train_name} [{t_info.get('type', 'Express')}]")
-    print(f"{BOLD}CORRIDOR ROUTE      :{RESET} {origin} ──► {dest} ({dist_km:,.0f} km | Kinematic MPS {mps:.0f} km/h)")
-    print(f"{BOLD}LOCOMOTIVE TRACTION :{RESET} WAP-7 AC Electric (6,000 HP • 0.35 m/s² Accel • 0.60 m/s² Service Brake)")
-    priority_label = "Priority 1 (High-Speed Rajdhani Precedence)" if priority == 1 else ("Priority 2 (Superfast Express Precedence)" if priority == 2 else "Priority 3 (Standard Express Running)")
-    print(f"{BOLD}DISPATCH TIER       :{RESET} {priority_label}")
-    print(f"{BOLD}JOURNEY DATE        :{RESET} {journey_date}")
+    print(f"{BOLD}CORRIDOR ROUTE      :{RESET} {origin} ──► {dest} ({dist_km:,.0f} km)")
+    print(f"{BOLD}JOURNEY DATE        :{RESET} {clean_date_str}")
     print(f"{CYAN}========================================================================================{RESET}")
 
     if live_success and live_payload:
+        live_payload["StartDate"] = clean_date_str
         print(f"  {GREEN}✔ Live GPS satellite telemetry & station punches synchronized successfully!{RESET}")
-        live_res = compute_live_eta_waterfall(train_no, live_payload)
+        now_time = datetime.now().time()
+        query_time = datetime.combine(parsed_base_dt.date(), now_time)
+        live_res = compute_live_eta_waterfall(train_no, live_payload, query_time=query_time)
         render_live_results(live_res, live_payload)
     else:
-        render_physics_engine_results(train_no, train_name, journey_date, priority, mps)
+        render_physics_engine_results(train_no, train_name, clean_date_str, priority, mps)
 
 
 def print_box_line(left_text: str, total_inner: int = 85):
@@ -252,31 +267,18 @@ def render_physics_engine_results(train_no: str, train_name: str, journey_date: 
     loc_name = geo["location_name"]
     track_desc = geo["track"]
 
-    from engine.weather_engine import weather_engine
-    curr_w = weather_engine.get_weather_for_section_sync([{"lat": ref_lat, "lon": ref_lon}])
-    w_pen = weather_engine.calculate_weather_penalty(curr_w, 100.0)
-    w_desc = curr_w.get("description", "Clear")
-    w_vis = int(curr_w.get("visibility", 5000))
-    w_temp = int(curr_w.get("temperature_celsius", 28))
-    w_impact = f"{YELLOW}Speed Capped: {w_pen['primary_factor'].upper()} (+{w_pen['total_weather_delay']:.1f}m/100km){RESET}" if w_pen['total_weather_delay'] > 0 else f"{GREEN}Normal line running (No atmospheric speed cap){RESET}"
+    # BOX 1: EXACT GEOSPATIAL LOCATION & LIVE TELEMETRY RADAR
+    live_status = f"{GREEN}{BOLD}RUNNING{RESET}" if speed > 5 else f"{YELLOW}{BOLD}HALTED / AT STATION{RESET}"
+    delay_disp = f"{GREEN}Right Time (0m){RESET}" if cur_delay == 0 else (
+        f"{RED}+{cur_delay:.0f} minutes{RESET}" if cur_delay > 0 else f"{GREEN}{cur_delay:+.0f} minutes{RESET}"
+    )
 
-    active_tsrs = [t for t in config.TSR_ZONES if t["start_km"] >= current_km]
-    if active_tsrs:
-        tsr_str = f"KM {active_tsrs[0]['start_km']:.0f}-{active_tsrs[0]['end_km']:.0f} @ {active_tsrs[0]['speed_cap_kmph']:.0f} km/h ({active_tsrs[0]['reason']})"
-    else:
-        tsr_str = "Clear Track (No active speed restriction orders in section)"
-
-    # BOX 1: SATELLITE GPS & LIVE GEOSPATIAL FIX
-    print(f"\n{CYAN}┌─ [1/4] SATELLITE GPS & LIVE GEOSPATIAL FIX ────────────────────────────────────────────┐{RESET}")
-    print_box_line(f"{BOLD}Telemetry Source :{RESET}  RTIS NavIC L5 / ISRO Satellite (3D Fix • 7 Satellites Locked)")
-    print_box_line(f"{BOLD}Exact Coordinates:{RESET}  {ref_lat:.4f}° N, {ref_lon:.4f}° E (Corridor KM {current_km:.1f})")
-    print_box_line(f"{BOLD}Location & Track :{RESET}  {loc_name}")
-    print_box_line(f"{BOLD}Active Section   :{RESET}  {track_desc}")
-    print_box_line(f"{BOLD}Kinematic Motion :{RESET}  {speed:.0f} km/h [CRUISING] (Sectional Line Speed Limit: {mps:.0f} km/h)")
-    print_box_line(f"{BOLD}Convoy Headway   :{RESET}  {headway:.1f} km behind Train {config.LEADING_TRAIN_CONFIG['train_no']} {config.LEADING_TRAIN_CONFIG['name']} (Green Aspect)")
-    print_box_line(f"{BOLD}Weather Radar    :{RESET}  METAR: {w_desc}, Vis {w_vis:,}m, {w_temp}°C -> {w_impact}")
-    print_box_line(f"{BOLD}Divisional TSRs  :{RESET}  {tsr_str}")
-    print_box_line(f"{BOLD}Ground Delay     :{RESET}  {cur_delay:+.1f} minutes")
+    print(f"\n{CYAN}┌─ [1/4] EXACT GEOSPATIAL LOCATION & LIVE TELEMETRY RADAR ──────────────────────────────┐{RESET}")
+    print_box_line(f"{BOLD}Operational Status :{RESET}  {live_status}")
+    print_box_line(f"{BOLD}Current Location   :{RESET}  {loc_name} ({track_desc})")
+    print_box_line(f"{BOLD}Exact Coordinates  :{RESET}  {ref_lat:.4f}° N, {ref_lon:.4f}° E (Corridor KM {current_km:.1f})")
+    print_box_line(f"{BOLD}Instantaneous Speed:{RESET}  {speed:.0f} km/h")
+    print_box_line(f"{BOLD}Live Ground Delay  :{RESET}  {delay_disp}")
     print(f"{CYAN}└────────────────────────────────────────────────────────────────────────────────────────┘{RESET}")
 
     # BOX 2: STATION-TO-STATION PROGRESSIVE DELAY & TIME-SLOT TRANSITION
@@ -441,32 +443,30 @@ def render_live_results(live_res: dict, live_payload: dict = None):
 
     pct_progress = (dist_cov / total_d * 100.0) if total_d > 0 else 0.0
 
-    from engine.weather_engine import weather_engine
-    curr_w = weather_engine.get_weather_for_section_sync([{"lat": cur_lat, "lon": cur_lng}])
-    w_pen = weather_engine.calculate_weather_penalty(curr_w, 100.0)
-    w_desc = curr_w.get("description", "Clear")
-    w_vis = int(curr_w.get("visibility", 5000))
-    w_temp = int(curr_w.get("temperature_celsius", 28))
-    w_impact = f"{YELLOW}Speed Capped: {w_pen['primary_factor'].upper()} (+{w_pen['total_weather_delay']:.1f}m/100km){RESET}" if w_pen['total_weather_delay'] > 0 else f"{GREEN}Normal line running (No atmospheric speed cap){RESET}"
-
-    # BOX 1: SATELLITE GPS & EXACT GEOSPATIAL LOCATION RADAR
+    # BOX 1: EXACT GEOSPATIAL LOCATION & LIVE TELEMETRY RADAR
     curr_stn_name = curr.get('name', 'Station')
     curr_stn_code = curr.get('code', 'CODE')
     curr_stn_str = f"{curr_stn_name} ({curr_stn_code}) [PF {curr_pf}]"
 
-    print(f"\n{CYAN}┌─ [1/4] EXACT GEOSPATIAL LOCATION & LIVE TELEMETRY RADAR ──────────────────────────────┐{RESET}")
-    print_box_line(f"{BOLD}Satellite Stream :{RESET}  RTIS NavIC L5 / ISRO Satellite ({source[:38]})")
-    print_box_line(f"{BOLD}Exact Coordinates:{RESET}  {cur_lat:.4f}° N, {cur_lng:.4f}° E (Progress: {dist_cov:.0f} km / {total_d:.0f} km • {pct_progress:.1f}%)")
-    
+    if cur_speed > 5:
+        live_status = f"{GREEN}{BOLD}RUNNING{RESET}"
+    elif ahead_txt:
+        live_status = f"{CYAN}{BOLD}IN TRANSIT{RESET}"
+    else:
+        live_status = f"{YELLOW}{BOLD}HALTED / AT STATION{RESET}"
+
     pos_desc = f"{curr_stn_str} • {ahead_txt}" if ahead_txt else f"{curr_stn_str} • At Station Berth"
-    print_box_line(f"{BOLD}Current Position :{RESET}  {pos_desc}")
-    
-    speed_disp = f"{cur_speed:.0f} km/h [CRUISING]" if cur_speed > 10 else (ahead_txt or "At Station Platform Berth")
-    print_box_line(f"{BOLD}Kinematic Motion :{RESET}  {speed_disp} (Status: {status_of[:30]})")
-    print_box_line(f"{BOLD}Weather Radar    :{RESET}  METAR: {w_desc}, Vis {w_vis:,}m, {w_temp}°C -> {w_impact}")
-    print_box_line(f"{BOLD}Live Ground Delay:{RESET}  +{curr.get('live_delay_min', 0):.0f} minutes (Current Station Reference)")
-    if curr.get("dead_reckon_desc"):
-        print_box_line(f"{BOLD}Dead Reckoning   :{RESET}  {curr.get('dead_reckon_desc')[:58]}")
+    cur_delay_min = curr.get('live_delay_min', 0)
+    delay_disp = f"{GREEN}Right Time (0m){RESET}" if cur_delay_min == 0 else (
+        f"{RED}+{cur_delay_min:.0f} minutes{RESET}" if cur_delay_min > 0 else f"{GREEN}{cur_delay_min:+.0f} minutes{RESET}"
+    )
+
+    print(f"\n{CYAN}┌─ [1/4] EXACT GEOSPATIAL LOCATION & LIVE TELEMETRY RADAR ──────────────────────────────┐{RESET}")
+    print_box_line(f"{BOLD}Operational Status :{RESET}  {live_status}")
+    print_box_line(f"{BOLD}Current Location   :{RESET}  {pos_desc}")
+    print_box_line(f"{BOLD}Exact Coordinates  :{RESET}  {cur_lat:.4f}° N, {cur_lng:.4f}° E (Progress: {dist_cov:.0f} km / {total_d:.0f} km • {pct_progress:.1f}%)")
+    print_box_line(f"{BOLD}Instantaneous Speed:{RESET}  {cur_speed:.0f} km/h")
+    print_box_line(f"{BOLD}Live Ground Delay  :{RESET}  {delay_disp}")
     print(f"{CYAN}└────────────────────────────────────────────────────────────────────────────────────────┘{RESET}")
 
     # BOX 2: STATION-TO-STATION PROGRESSIVE DELAY & TIME-SLOT TRANSITION
@@ -759,7 +759,7 @@ def main():
         if sys.stdin.isatty():
             try:
                 print(f"{CYAN}┌─ [JOURNEY DATE] ───────────────────────────────────────────────────────────────────────┐{RESET}")
-                print(f"│ Press Enter to use Today's Date [{today_str}] or enter YYYY-MM-DD                      │")
+                print(f"│ Press Enter for Today's Date [{today_str}] or enter YYYY-MM-DD                          │")
                 user_d = input(f"└─► {BOLD}Journey Date [{today_str}]:{RESET} ").strip()
                 date_input = user_d if user_d else today_str
             except (KeyboardInterrupt, EOFError):

@@ -252,7 +252,25 @@ def fetch_ntes_live_data(train_number: str, date_yyyymmdd: Optional[str] = None)
     route_raw = tt.get("route", [])
     
     train_name = lts.get("train_name") or tt.get("train_name") or erail_info.get("train_name") or f"Train {clean_tno}"
-    start_date = lts.get("train_start_date") or props.get("trainStartDate") or datetime.now().strftime("%Y-%m-%d")
+
+    if date_yyyymmdd:
+        clean_in_d = str(date_yyyymmdd).replace("-", "").strip()
+        if len(clean_in_d) == 8 and clean_in_d.isdigit():
+            start_date = f"{clean_in_d[:4]}-{clean_in_d[4:6]}-{clean_in_d[6:]}"
+        else:
+            start_date = str(date_yyyymmdd).strip()
+    else:
+        raw_sd = lts.get("train_start_date") or props.get("trainStartDate")
+        if raw_sd:
+            start_date = raw_sd
+            for f in ["%d-%m-%Y", "%Y-%m-%d", "%Y%m%d", "%d/%m/%Y"]:
+                try:
+                    start_date = datetime.strptime(raw_sd.strip(), f).strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    pass
+        else:
+            start_date = datetime.now().strftime("%Y-%m-%d")
     
     # Identify commercial stopping stations
     stopping_stations = [r for r in route_raw if r.get("stop", False) or r.get("station_code") in [lts.get("source"), lts.get("destination")]]
@@ -658,17 +676,21 @@ def compute_live_eta_waterfall(
     identifies last passed station, computes accurate downstream station ETAs,
     sectional time deletion, and 5-factor delay waterfall.
     """
-    current_time = query_time or datetime.now()
-    
     start_date_str = live_api_payload.get("StartDate", "")
-    base_date = current_time
+    base_date = datetime.now()
     if start_date_str:
-        for fmt in ["%d-%m-%Y", "%Y-%m-%d", "%Y%m%d", "%d %b %Y"]:
+        for fmt in ["%d-%m-%Y", "%Y-%m-%d", "%Y%m%d", "%d %b %Y", "%d/%m/%Y"]:
             try:
                 base_date = datetime.strptime(start_date_str.strip(), fmt)
                 break
             except ValueError:
                 continue
+
+    if query_time:
+        current_time = query_time
+    else:
+        now_t = datetime.now().time()
+        current_time = datetime.combine(base_date.date(), now_t)
 
     curr_stn_info = live_api_payload.get("CurrentStation") or {}
     curr_stn_code = curr_stn_info.get("StationCode", "")
