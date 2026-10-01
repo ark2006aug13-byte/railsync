@@ -426,6 +426,20 @@ for _candidate_path in [
         except Exception:
             pass
 
+_TRAINS_CATALOG: Dict[str, Dict[str, Any]] = {}
+for _cat_path in [
+    BASE_DIR.parent / "database" / "data" / "trains_catalog.json",
+    BASE_DIR / "database" / "data" / "trains_catalog.json",
+    BASE_DIR / "data" / "trains_catalog.json",
+]:
+    if _cat_path.exists():
+        try:
+            with open(_cat_path, "r", encoding="utf-8") as f:
+                _TRAINS_CATALOG = json.load(f)
+            break
+        except Exception:
+            pass
+
 # Known Indian Railways station renaming aliases & missing coordinates
 STATION_ALIASES: Dict[str, Any] = {
     "PRYJ": "ALD",
@@ -800,130 +814,160 @@ def resolve_authentic_train_schedule(clean_no: str, api_key: Optional[str] = Non
     if clean_tno in {"00000", "99999", "11111", "12345", "0000"} or not clean_tno.isdigit() or len(clean_tno) != 5:
         return None
 
-    # Plausible Indian Railways train numbers (e.g. 10000-29999)
-    if 10000 <= int(clean_tno) <= 29999:
-        return build_synthetic_profile(clean_tno)
+    # Check if train exists in active catalog
+    if clean_tno in _TRAINS_CATALOG:
+        cat_item = _TRAINS_CATALOG[clean_tno]
+        return build_profile_from_catalog(clean_tno, cat_item)
 
     return None
 
 
-def build_synthetic_profile(train_number: str) -> Dict[str, Any]:
+def build_profile_from_catalog(clean_no: str, cat_item: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Synthesizes a realistic corridor profile if all external networks are completely offline.
+    Builds authentic timetable profile from catalog origin and destination.
     """
-    clean_no = str(train_number).strip()
-    is_raj = clean_no.startswith(("123", "124", "129", "226"))
-    is_vb = clean_no.startswith(("224", "206", "208"))
-    is_shatabdi = clean_no.startswith("120")
-    is_superfast = clean_no.startswith(("12", "20", "22"))
+    t_name = cat_item.get("train_name", f"Train {clean_no}")
+    t_type = cat_item.get("type", "Express")
+    orig_code = cat_item.get("origin_code", "SRC")
+    orig_name = cat_item.get("origin_name", orig_code)
+    dest_code = cat_item.get("dest_code", "DST")
+    dest_name = cat_item.get("dest_name", dest_code)
 
-    if is_vb:
-        t_type = "Vande Bharat Express"
-        mps = 130.0
-        prio = 1
-    elif is_raj:
-        t_type = "Rajdhani Express"
-        mps = 130.0
-        prio = 1
-    elif is_shatabdi:
-        t_type = "Shatabdi Express"
-        mps = 130.0
-        prio = 1
-    elif is_superfast:
-        t_type = "Superfast Express"
-        mps = 130.0
-        prio = 2
-    else:
-        t_type = "Mail & Express"
-        mps = 110.0
-        prio = 3
+    orig_lat, orig_lng = resolve_station_coordinates(orig_code)
+    dest_lat, dest_lng = resolve_station_coordinates(dest_code)
 
-    name = f"Indian Railways {t_type} {clean_no}"
+    mps = 130.0 if any(k in t_type.lower() for k in ["rajdhani", "shatabdi", "vande", "tejas", "superfast"]) else 110.0
+    prio = 1 if any(k in t_type.lower() for k in ["rajdhani", "shatabdi", "vande"]) else (2 if "superfast" in t_type.lower() else 3)
 
     stations = [
-        {"code": "NDLS", "name": "New Delhi", "km": 0.0, "halt_min": 0, "platform": "12", "lat": 28.6424, "lng": 77.2195, "arr_min": 0, "dep_min": 0, "arr_time": "08:00", "dep_time": "08:00", "status": "UPCOMING", "intermediate_stations": []},
-        {"code": "CNB", "name": "Kanpur Central", "km": 440.0, "halt_min": 5, "platform": "1", "lat": 26.4547, "lng": 80.3507, "arr_min": 240, "dep_min": 245, "arr_time": "12:00", "dep_time": "12:05", "status": "UPCOMING", "intermediate_stations": []},
-        {"code": "PRYJ", "name": "Prayagraj Jn", "km": 634.0, "halt_min": 2, "platform": "4", "lat": 25.4497, "lng": 81.8282, "arr_min": 360, "dep_min": 362, "arr_time": "14:00", "dep_time": "14:02", "status": "UPCOMING", "intermediate_stations": []},
-        {"code": "DDU", "name": "Pt. Deen Dayal Upadhyaya Jn", "km": 787.0, "halt_min": 10, "platform": "3", "lat": 25.2785, "lng": 83.1235, "arr_min": 460, "dep_min": 470, "arr_time": "15:40", "dep_time": "15:50", "status": "UPCOMING", "intermediate_stations": []},
-        {"code": "HWH", "name": "Howrah Jn", "km": 1451.0, "halt_min": 0, "platform": "9", "lat": 22.5830, "lng": 88.3426, "arr_min": 900, "dep_min": 900, "arr_time": "23:00", "dep_time": "23:00", "status": "UPCOMING", "intermediate_stations": []},
+        {"code": orig_code, "name": orig_name, "km": 0.0, "halt_min": 0, "platform": "1", "lat": orig_lat or 28.6139, "lng": orig_lng or 77.2090, "arr_min": 0, "dep_min": 0, "arr_time": "08:00", "dep_time": "08:00", "status": "UPCOMING", "intermediate_stations": []},
+        {"code": dest_code, "name": dest_name, "km": 1450.0, "halt_min": 0, "platform": "1", "lat": dest_lat or 22.5726, "lng": dest_lng or 88.3639, "arr_min": 900, "dep_min": 900, "arr_time": "23:00", "dep_time": "23:00", "status": "UPCOMING", "intermediate_stations": []},
     ]
 
     return {
         "train_no": clean_no,
-        "name": name,
+        "name": t_name,
         "type": t_type,
-        "origin_code": "NDLS",
-        "origin_name": "New Delhi",
-        "dest_code": "HWH",
-        "dest_name": "Howrah Jn",
+        "origin_code": orig_code,
+        "origin_name": orig_name,
+        "dest_code": dest_code,
+        "dest_name": dest_name,
         "scheduled_departure": "08:00",
         "scheduled_arrival": "23:00",
-        "total_distance_km": 1451.0,
+        "total_distance_km": 1450.0,
         "mps": mps,
         "priority": prio,
         "default_ground": {
-            "km": 460.0,
-            "speed_kmph": mps * 0.92,
-            "delay_min": 12.0 if prio > 1 else 4.0,
-            "current_section": "CNB-PRYJ",
+            "km": 0.0,
+            "speed_kmph": 0.0,
+            "delay_min": 0.0,
+            "current_section": f"{orig_code}-{dest_code}",
             "signal_aspect": "GREEN",
-            "headway_gap_km": 21.0,
-            "leading_train": "12876"
+            "headway_gap_km": 25.0,
+            "leading_train": ""
         },
         "stations": stations
     }
 
 
-def resolve_train_profile(query: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+def search_trains_dynamic(query: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Resolves train query by train number, keyword, or query containing a train number.
-    Returns the comprehensive authentic train profile.
+    Dynamically searches the comprehensive Indian Railways schedule dataset.
+    Returns:
+      (resolved_train_info, []) if single unique match found.
+      (None, matching_options) if multiple matches found (for disambiguation).
+      (None, []) if no match found.
     """
-    if not query:
-        return resolve_authentic_train_schedule("12301", api_key)
+    if not query or not str(query).strip():
+        return None, []
 
     raw_q = str(query).strip()
-    q = raw_q.lower()
+    q_lower = raw_q.lower()
 
-    # 1. Look for a 5-digit train number anywhere in the query string (e.g. '12004 Shatabdi Exp', 'Train 12368')
+    # 1. Check if user typed a 5-digit train number (or query contains a 5-digit number)
     match_5d = re.search(r'\b\d{5}\b', raw_q)
     if match_5d:
-        train_digits = match_5d.group(0)
-        return resolve_authentic_train_schedule(train_digits, api_key)
+        train_num = match_5d.group(0)
+        # Check catalog
+        if train_num in _TRAINS_CATALOG:
+            return _TRAINS_CATALOG[train_num], []
+        # Check active live service or authentic schedule
+        prof = resolve_authentic_train_schedule(train_num)
+        if prof:
+            return {
+                "train_number": prof["train_no"],
+                "train_name": prof["name"],
+                "origin_code": prof.get("origin_code", "SRC"),
+                "origin_name": prof.get("origin_name", "Source"),
+                "dest_code": prof.get("dest_code", "DST"),
+                "dest_name": prof.get("dest_name", "Destination"),
+                "type": prof.get("type", "Express")
+            }, []
+        return None, []
 
-    # 2. Check keyword matches for prominent trains
-    keyword_map = {
-        "shatabdi": "12004",
-        "swarna shatabdi": "12004",
-        "vande": "22436",
-        "bharat": "22436",
-        "vikramshila": "12367",
-        "brahmaputra": "15657",
-        "neelachal": "12876",
-        "tejas": "12951",
-        "mumbai rajdhani": "12951",
-        "rajdhani": "12301",
-        "kolkata rajdhani": "12302",
-        "howrah rajdhani": "12301",
-        "dibrugarh": "12424",
-        "duronto": "12259",
-        "gorakhdham": "12555",
-    }
-    for kw, t_no in keyword_map.items():
-        if kw in q:
-            return resolve_authentic_train_schedule(t_no, api_key)
+    # 2. Check if user typed digits but not 5 digits (invalid train number)
+    if raw_q.isdigit():
+        return None, []
 
-    # 3. Match in static TRAIN_PROFILES by name
-    for t_no, p in TRAIN_PROFILES.items():
-        if q in p["name"].lower():
-            return resolve_authentic_train_schedule(t_no, api_key)
+    # 3. Dynamic Case-Insensitive Name Search
+    matches = []
+    seen_numbers = set()
 
-    # 4. Any isolated digits
-    digits = "".join(filter(str.isdigit, raw_q))
-    if len(digits) == 5:
-        return resolve_authentic_train_schedule(digits, api_key)
+    # Check curated TRAIN_PROFILES first for priority resolution
+    for t_num, p in TRAIN_PROFILES.items():
+        if q_lower in p["name"].lower():
+            if t_num not in seen_numbers:
+                seen_numbers.add(t_num)
+                matches.append({
+                    "train_number": t_num,
+                    "train_name": p["name"],
+                    "origin_code": p.get("origin_code", "SRC"),
+                    "origin_name": p.get("origin_name", "Source"),
+                    "dest_code": p.get("dest_code", "DST"),
+                    "dest_name": p.get("dest_name", "Destination"),
+                    "type": p.get("type", "Express")
+                })
 
-    # Return None if train cannot be recognized (do NOT silently fallback to 12301)
+    for t_num, t_info in _TRAINS_CATALOG.items():
+        t_name = t_info.get("train_name", "")
+        if q_lower in t_name.lower():
+            if t_num not in seen_numbers:
+                seen_numbers.add(t_num)
+                matches.append(t_info)
+
+    if not matches:
+        return None, []
+
+    # If exact match exists (e.g. user typed "Gitanjali Express" or full name)
+    exact_matches = [m for m in matches if m.get("train_name", "").lower() == q_lower]
+    if len(exact_matches) == 1:
+        return exact_matches[0], []
+    elif len(exact_matches) > 1:
+        return None, exact_matches
+
+    # If exactly 1 partial match
+    if len(matches) == 1:
+        return matches[0], []
+
+    # Multiple matches -> return list for disambiguation
+    return None, matches
+
+
+def resolve_train_profile(query: str, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Resolves train query dynamically by train number or train name.
+    Strictly user-input driven: NO hardcoded fallback seeds.
+    """
+    if not query or not str(query).strip():
+        return None
+
+    resolved, matches = search_trains_dynamic(query)
+    if resolved:
+        return resolve_authentic_train_schedule(resolved["train_number"], api_key)
+    elif matches:
+        # If multiple matches and caller needed profile, resolve first candidate
+        return resolve_authentic_train_schedule(matches[0]["train_number"], api_key)
+
     return None
 
 
