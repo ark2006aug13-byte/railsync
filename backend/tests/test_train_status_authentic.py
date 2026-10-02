@@ -119,11 +119,25 @@ def test_status_path_based_routing():
 
 def test_status_not_started_train_telemetry():
     """Verify a train that has not yet departed returns NOT_STARTED status with zero speed."""
-    resp = client.get("/api/train/status?train_query=12301&journey_date=2026-10-01")
+    from datetime import datetime, timedelta
+    future_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    resp = client.get(f"/api/train/status?train_query=12301&journey_date={future_date}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["train"]["number"] == "12301"
-    # Train 12301 departs at 16:50 IST, so before that it must be NOT_STARTED
+    # Train scheduled for future date must be NOT_STARTED
     assert data["running_status"]["status"] == "NOT_STARTED"
     assert data["running_status"]["current_speed_kmh"] == 0
     assert data["running_status"]["last_station"]["code"] == "HWH"
+
+
+def test_status_completed_reached_train_telemetry():
+    """Verify a train that has already reached destination returns TERMINATED status with arrival timing."""
+    resp = client.get("/api/train/status?train_query=12004&journey_date=2026-06-01")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["train"]["number"] == "12004"
+    assert data["running_status"]["status"] == "TERMINATED"
+    assert data["running_status"]["current_speed_kmh"] == 0
+    assert data["running_status"]["last_station"]["code"] == "LKO"
+    assert "arrival_timing" in data["running_status"]

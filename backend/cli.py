@@ -131,8 +131,8 @@ def render_train_location(data: Dict[str, Any]):
         status_badge = f"{YELLOW}{BOLD}🟡 HALTED (At Station / Signal • 0 km/h){RESET}"
     elif status == "NOT_STARTED":
         status_badge = f"{DIM}⚪ NOT STARTED (At Origin Platform • 0 km/h){RESET}"
-    elif status == "TERMINATED":
-        status_badge = f"{CYAN}🏁 TERMINATED (Journey Completed • 0 km/h){RESET}"
+    elif status in ["TERMINATED", "COMPLETED", "REACHED"]:
+        status_badge = f"{CYAN}{BOLD}🏁 REACHED (Journey Completed • 0 km/h){RESET}"
     else:
         status_badge = f"{BOLD}{status}{RESET}"
 
@@ -157,10 +157,57 @@ def render_train_location(data: Dict[str, Any]):
     next_code = next_stn.get("code", "")
     rem_dist = float(next_stn.get("distance_km", 0.0))
 
+    # Specialized rendering for REACHED / TERMINATED trains
+    if status in ["TERMINATED", "COMPLETED", "REACHED"]:
+        arrival_timing = running.get("arrival_timing") or {}
+        dest_name = arrival_timing.get("destination_name") or next_name or last_name
+        dest_code = arrival_timing.get("destination_code") or next_code or last_code
+        pf = arrival_timing.get("platform", "1")
+        sch_arr = arrival_timing.get("scheduled_arrival") or next_stn.get("scheduled_arrival") or "N/A"
+        act_arr = arrival_timing.get("actual_arrival") or next_stn.get("expected_arrival") or "N/A"
+        arr_delay = int(arrival_timing.get("delay_minutes", delay))
+
+        status_badge = f"{CYAN}{BOLD}🏁 REACHED (Journey Completed • Standing at Platform {pf}){RESET}"
+        loc_desc = f"Reached Destination Terminal • {dest_name} ({dest_code}) [Platform {pf}]"
+
+        if arr_delay == 0:
+            arr_delay_str = f"{GREEN}{BOLD}🟢 Arrived On-Time / Right Time (0m delay){RESET}"
+        elif arr_delay > 0:
+            arr_delay_str = f"{RED}{BOLD}🔴 Arrived +{arr_delay} minutes late{RESET}"
+        else:
+            arr_delay_str = f"{GREEN}{BOLD}🟢 Arrived {abs(arr_delay)} minutes early{RESET}"
+
+        print(f"{BOLD}TRAIN           :{RESET} {CYAN}{train_num} - {train_name}{RESET}")
+        print(f"{BOLD}ROUTE           :{RESET} {source} ──► {dest}")
+        print(f"{BOLD}JOURNEY DATE    :{RESET} {date_label}")
+        print(f"{CYAN}----------------------------------------------------------------------------------------{RESET}")
+
+        print(f"{CYAN}┌─ EXACT LIVE LOCATION & GPS TELEMETRY ──────────────────────────────────────────────────┐{RESET}")
+        print_box_line("")
+        print_box_line(f"{BOLD}📍 Current Location  :{RESET} {loc_desc}")
+        print_box_line(f"{BOLD}🌐 GPS Coordinates   :{RESET} {coords_str}")
+        print_box_line(f"{BOLD}🚦 Operational Status:{RESET} {status_badge}")
+        print_box_line(f"{BOLD}⚡ Instant Speed     :{RESET} 0 km/h (Standing at Destination Platform)")
+        print_box_line(f"{BOLD}⏱️  Arrival Analysis :{RESET} {arr_delay_str}")
+        if sch_arr != "N/A" and act_arr != "N/A":
+            print_box_line(f"{BOLD}🕒 Arrival Timings   :{RESET} Scheduled: {sch_arr} IST • Actual: {act_arr} IST")
+        print_box_line("")
+        print_box_line(f"{BOLD}🏁 Destination Halt  :{RESET} {dest_name} ({dest_code}) [Platform {pf}] • Arrived {act_arr} IST")
+
+        last_sync = data.get("last_synced_ist", "")
+        if last_sync:
+            try:
+                sync_time = datetime.fromisoformat(last_sync).strftime("%H:%M:%S")
+                print_box_line(f"{BOLD}🕒 Telemetry Sync    :{RESET} {sync_time} IST (Live Satellite / NTES Feed)")
+            except Exception:
+                pass
+
+        print_box_line("")
+        print(f"{CYAN}└────────────────────────────────────────────────────────────────────────────────────────┘{RESET}\n")
+        return
+
     if status == "NOT_STARTED":
         loc_desc = f"Origin Platform • {last_name} ({last_code})"
-    elif status == "TERMINATED":
-        loc_desc = f"Destination Terminal • {next_name or last_name} ({next_code or last_code})"
     elif status == "HALTED" or speed == 0.0:
         loc_desc = f"Standing at / near {last_name} ({last_code})"
     else:
