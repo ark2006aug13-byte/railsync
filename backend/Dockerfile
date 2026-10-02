@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy backend source directories and configs
 COPY backend/api/ /app/api/
+COPY backend/services/ /app/services/
 COPY backend/engine/ /app/engine/
 COPY backend/ml/ /app/ml/
 COPY backend/models/ /app/models/
