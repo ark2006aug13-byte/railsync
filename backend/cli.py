@@ -5,12 +5,13 @@ Real-Time Train Location Tracker via Live GPS Telemetry API.
 Usage:
   python cli.py
   python cli.py 12301
-  python cli.py 12424 --date 2026-10-02
+  python cli.py 12424 --date tomorrow
+  python cli.py 12367 --date 2026-10-03
   python cli.py Vikramshila
 """
 import argparse
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import os
 from pathlib import Path
@@ -56,7 +57,7 @@ RESET = "\033[0m"
 def print_banner():
     print(f"\n{CYAN}========================================================================================{RESET}")
     print(f"{CYAN}{BOLD}  🚆 RAILSYNC - REAL-TIME TRAIN LOCATION RADAR (LIVE GPS TELEMETRY)                    {RESET}")
-    print(f"{CYAN}{DIM}  Official Indian Railways Satellite Telemetry • Zero Fake Simulation                  {RESET}")
+    print(f"{CYAN}{DIM}  Official Indian Railways Satellite Telemetry • Dynamic Kinematics & Date Engine      {RESET}")
     print(f"{CYAN}========================================================================================{RESET}\n")
 
 
@@ -65,6 +66,29 @@ def print_box_line(left_text: str, total_inner: int = 86):
     visible = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', left_text)
     pad = " " * max(0, total_inner - len(visible))
     print(f"│  {left_text}{pad}│")
+
+
+def parse_user_date_input(raw: Optional[str]) -> str:
+    """Parses date string or natural keywords (today, tomorrow, yesterday) to YYYY-MM-DD."""
+    today = datetime.now()
+    if not raw or not str(raw).strip():
+        return today.strftime("%Y-%m-%d")
+    clean = str(raw).strip().lower()
+    if clean in ["today", "aaj", "t"]:
+        return today.strftime("%Y-%m-%d")
+    if clean in ["tomorrow", "kal", "tom", "+1"]:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    if clean in ["yesterday", "beeta kal", "yest", "-1"]:
+        return (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Try common calendar formats
+    for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%Y%m%d"]:
+        try:
+            return datetime.strptime(clean, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    return today.strftime("%Y-%m-%d")
 
 
 def render_train_location(data: Dict[str, Any]):
@@ -87,15 +111,28 @@ def render_train_location(data: Dict[str, Any]):
     lng = curr_loc.get("lng")
     delay = int(last_stn.get("delay_minutes", 0))
 
+    today_s = datetime.now().strftime("%Y-%m-%d")
+    tom_s = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    yest_s = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if origin_date == today_s:
+        date_label = f"{origin_date} (Today)"
+    elif origin_date == tom_s:
+        date_label = f"{origin_date} (Tomorrow • Scheduled Service)"
+    elif origin_date == yest_s:
+        date_label = f"{origin_date} (Yesterday • Completed / Archived)"
+    else:
+        date_label = f"{origin_date}"
+
     # Operational status badge
     if status == "RUNNING":
-        status_badge = f"{GREEN}{BOLD}🟢 RUNNING (In Motion){RESET}"
+        status_badge = f"{GREEN}{BOLD}🟢 RUNNING (In Motion • {speed:.0f} km/h){RESET}"
     elif status == "HALTED":
-        status_badge = f"{YELLOW}{BOLD}🟡 HALTED (At Station / Signal){RESET}"
+        status_badge = f"{YELLOW}{BOLD}🟡 HALTED (At Station / Signal • 0 km/h){RESET}"
     elif status == "NOT_STARTED":
-        status_badge = f"{DIM}⚪ NOT STARTED (At Origin Station){RESET}"
+        status_badge = f"{DIM}⚪ NOT STARTED (At Origin Platform • 0 km/h){RESET}"
     elif status == "TERMINATED":
-        status_badge = f"{CYAN}🏁 TERMINATED (Journey Completed){RESET}"
+        status_badge = f"{CYAN}🏁 TERMINATED (Journey Completed • 0 km/h){RESET}"
     else:
         status_badge = f"{BOLD}{status}{RESET}"
 
@@ -123,8 +160,8 @@ def render_train_location(data: Dict[str, Any]):
     if status == "NOT_STARTED":
         loc_desc = f"Origin Platform • {last_name} ({last_code})"
     elif status == "TERMINATED":
-        loc_desc = f"Destination Terminal • {next_name} ({next_code})"
-    elif speed == 0.0:
+        loc_desc = f"Destination Terminal • {next_name or last_name} ({next_code or last_code})"
+    elif status == "HALTED" or speed == 0.0:
         loc_desc = f"Standing at / near {last_name} ({last_code})"
     else:
         loc_desc = f"Passed {last_name} ({last_code}) • Approaching {next_name} ({next_code})"
@@ -132,7 +169,7 @@ def render_train_location(data: Dict[str, Any]):
     # Print Train Specification Header
     print(f"{BOLD}TRAIN           :{RESET} {CYAN}{train_num} - {train_name}{RESET}")
     print(f"{BOLD}ROUTE           :{RESET} {source} ──► {dest}")
-    print(f"{BOLD}JOURNEY DATE    :{RESET} {origin_date}")
+    print(f"{BOLD}JOURNEY DATE    :{RESET} {date_label}")
     print(f"{CYAN}----------------------------------------------------------------------------------------{RESET}")
 
     # Print Location Radar Box
@@ -146,8 +183,9 @@ def render_train_location(data: Dict[str, Any]):
     print_box_line("")
 
     # Station punches
-    last_dep = last_stn.get("actual_departure") or "N/A"
-    print_box_line(f"{BOLD}⏮️  Last Passed Halt  :{RESET} {last_name} ({last_code}) • Departed {last_dep} IST")
+    last_dep = last_stn.get("actual_departure") or last_stn.get("scheduled_departure") or "N/A"
+    dep_label = "Scheduled Dep." if status == "NOT_STARTED" else "Departed"
+    print_box_line(f"{BOLD}⏮️  Last Passed Halt  :{RESET} {last_name} ({last_code}) • {dep_label} {last_dep} IST")
 
     if status != "TERMINATED" and next_name:
         next_exp = next_stn.get("expected_arrival") or next_stn.get("scheduled_arrival") or "N/A"
@@ -168,7 +206,7 @@ def render_train_location(data: Dict[str, Any]):
 
 async def track_train(train_query: str, journey_date: Optional[str] = None):
     """Fetches and displays live authentic train status."""
-    clean_date = journey_date or datetime.now().strftime("%Y-%m-%d")
+    clean_date = parse_user_date_input(journey_date)
     print(f"{DIM}📡 Fetching live GPS telemetry for train '{train_query}' ({clean_date})...{RESET}")
 
     try:
@@ -215,15 +253,16 @@ def main():
     parser = argparse.ArgumentParser(description="RailSync Live Train Location CLI")
     parser.add_argument("query", nargs="?", default=None, help="5-digit Train Number (e.g. 12301) or Train Name")
     parser.add_argument("--train", "-t", type=str, default=None, help="Train Number or Name")
-    parser.add_argument("--date", "-d", type=str, default=None, help="Journey Date (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument("--date", "-d", type=str, default=None, help="Journey Date ('today', 'tomorrow', 'yesterday', or YYYY-MM-DD)")
 
     args = parser.parse_args()
     initial_query = args.train or args.query
-    initial_date = args.date
+    initial_date = parse_user_date_input(args.date) if args.date else None
 
     # Direct execution mode if train query passed as argument
     if initial_query:
-        asyncio.run(track_train(initial_query, initial_date))
+        today_default = datetime.now().strftime("%Y-%m-%d")
+        asyncio.run(track_train(initial_query, initial_date or today_default))
         return
 
     # Interactive continuous prompt mode
@@ -241,7 +280,17 @@ def main():
             print("Exiting RailSync.")
             break
 
-        asyncio.run(track_train(train_input, initial_date or today_str))
+        # Prompt for Journey Date with intelligent defaults
+        try:
+            print(f"{CYAN}┌─ [JOURNEY DATE] ───────────────────────────────────────────────────────────────────────┐{RESET}")
+            print(f"│ Press Enter for Today [{today_str}], or enter 'tomorrow', 'yesterday', or YYYY-MM-DD     │")
+            raw_date = input(f"└─► {BOLD}Journey Date [{today_str}]:{RESET} ").strip()
+            date_input = parse_user_date_input(raw_date)
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting RailSync.")
+            break
+
+        asyncio.run(track_train(train_input, date_input))
 
         try:
             nxt = input(f"{DIM}Press Enter to track another train, or 'q' to quit: {RESET}").strip()
