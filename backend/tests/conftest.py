@@ -1,6 +1,13 @@
 import asyncio
 import inspect
+from pathlib import Path
+import sys
 import pytest
+
+# Ensure backend directory is always on sys.path for test discovery
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 
 def pytest_pyfunc_call(pyfuncitem):

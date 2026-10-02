@@ -105,6 +105,7 @@ from engine.network_tracker import NetworkTracker
 from engine.incident_detector import IncidentDetector
 from models.network_state import TrainPosition
 from api.incidents import router as incidents_router, get_train_incidents
+from api.v1.trains import router as trains_v1_router
 
 # Global network tracker instance
 network_tracker = NetworkTracker()
@@ -181,6 +182,7 @@ app = FastAPI(
 )
 
 app.include_router(incidents_router)
+app.include_router(trains_v1_router)
 
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
