@@ -121,3 +121,83 @@ def test_live_status_another_profile(client):
     assert validated.train_info.train_number == "12367"
     assert validated.train_info.journey_date == "2026-06-30"
     assert len(validated.schedule_stoppages) >= 2
+
+
+def test_build_enriched_schedule_and_halts_dynamic_eta():
+    """Verifies that build_enriched_schedule_and_halts computes true dynamic ETAs without 'START' bug."""
+    from engine.live_rail_api import build_enriched_schedule_and_halts
+
+    sample_route = [
+        {
+            "stationCode": "BGP",
+            "stationName": "BHAGALPUR",
+            "distance": 0.0,
+            "platform": "1",
+            "scheduledArrival": "START",
+            "scheduledDeparture": "11:55",
+            "status": "DEPARTED",
+            "isHalt": True
+        },
+        {
+            "stationCode": "SGG",
+            "stationName": "SULTANGANJ",
+            "distance": 25.0,
+            "platform": "2",
+            "scheduledArrival": "12:08",
+            "scheduledDeparture": "12:10",
+            "status": "UPCOMING",
+            "isHalt": True
+        },
+        {
+            "stationCode": "ANVT",
+            "stationName": "ANAND VIHAR TRM",
+            "distance": 1207.0,
+            "platform": "3",
+            "scheduledArrival": "07:20",
+            "scheduledDeparture": "TERM",
+            "status": "UPCOMING",
+            "isHalt": True
+        }
+    ]
+
+    curr_loc = {
+        "stationCode": "BGP",
+        "distanceFromOriginKm": 10.0,
+        "delayMinutes": 15
+    }
+
+    schedule_out, route_halts = build_enriched_schedule_and_halts(
+        route=sample_route,
+        curr_loc=curr_loc,
+        op_status="RUNNING",
+        last_code="BGP",
+        next_code="SGG",
+        last_delay_min=15
+    )
+
+    assert len(route_halts) == 3
+    
+    # 1. Origin station assertions (no 'START' bug)
+    origin = route_halts[0]
+    assert origin["code"] == "BGP"
+    assert origin["exp_arr"] == "--:--"
+    assert "START" not in origin["time_display"]
+    assert "Dept. 11:55 IST" in origin["time_display"]
+    assert origin["status"] == "PASSED"
+
+    # 2. Upcoming station assertions (dynamic ETA adds delay)
+    sgg = route_halts[1]
+    assert sgg["code"] == "SGG"
+    assert sgg["status"] == "NEXT"
+    assert sgg["exp_arr"] == "12:23"  # 12:08 + 15 min delay
+    assert sgg["time_display"] == "Exp. 12:23 IST"
+
+    # 3. Terminal station assertions (slack recovery on 1182km high speed run)
+    anvt = route_halts[2]
+    assert anvt["code"] == "ANVT"
+    assert anvt["status"] == "DEST"
+    assert anvt["exp_dep"] == "TERM"
+    # Delay recovered via slack buffer: recovery >= 15 min -> cur_del = 0
+    assert anvt["delay_min"] == 0
+    assert anvt["exp_arr"] == "07:20"
+

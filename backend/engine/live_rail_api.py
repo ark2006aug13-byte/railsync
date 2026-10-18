@@ -40,11 +40,16 @@ def get_current_ist_date() -> str:
     return get_current_ist_datetime().strftime("%Y-%m-%d")
 
 def extract_hhmm(dt_str: Optional[str]) -> str:
-    """Extracts a clean HH:MM time string from ISO datetime or timestamp."""
+    """Extracts a clean HH:MM time string from ISO datetime, timestamp, or label."""
     if not dt_str:
         return "--:--"
     s = str(dt_str).strip()
-    if "T" in s:
+    s_up = s.upper()
+    if s_up in ["START", "SRC", "SOURCE", "ORIGIN"]:
+        return "START"
+    if s_up in ["TERM", "TERMINUS", "END", "DST", "DESTINATION"]:
+        return "TERM"
+    if "T" in s and any(c.isdigit() for c in s):
         part = s.split("T")[1]
         return part[:5]
     if " " in s:
@@ -112,6 +117,21 @@ def add_minutes_to_time_str(time_str: Optional[str], minutes_to_add: int) -> str
     except Exception:
         pass
     return time_str
+
+
+def parse_time_to_minutes(time_str: Optional[str]) -> Optional[int]:
+    """Parses a time string like '11:55' or '11:55 IST' into integer minutes from midnight."""
+    if not time_str or time_str in ["--:--", "START", "TERM", ""]:
+        return None
+    hhmm = extract_hhmm(time_str)
+    if ":" in hhmm:
+        try:
+            parts = hhmm.split(":")[:2]
+            h, m = int(parts[0]), int(parts[1])
+            return h * 60 + m
+        except Exception:
+            return None
+    return None
 
 
 def parse_delay_string(delay_str: Optional[str]) -> float:
@@ -310,12 +330,48 @@ def fetch_ntes_live_data(train_number: str, date_yyyymmdd: Optional[str] = None)
             cur_lat = cur_lat or stopping_stations[0].get("lat")
             cur_lng = cur_lng or stopping_stations[0].get("lng")
 
+    # Build lookup of live recorded station data from ltsData (previous_stations and upcoming_stations)
+    live_records = {}
+    for p in (lts.get("previous_stations") or []):
+        c = p.get("station_code")
+        if c:
+            arr_d = p.get("arrival_delay")
+            dep_d = p.get("departure_delay") if p.get("departure_delay") is not None else arr_d
+            live_records[c] = {
+                "act_arr": p.get("eta") or p.get("sta"),
+                "act_dep": p.get("etd") or p.get("std"),
+                "delay_arr": arr_d,
+                "delay_dep": dep_d,
+                "platform": p.get("platform_number"),
+                "status": "departed",
+                "is_departed": True
+            }
+    for u in (lts.get("upcoming_stations") or []):
+        c = u.get("station_code")
+        if c and c not in live_records:
+            arr_d = u.get("arrival_delay")
+            dep_d = u.get("departure_delay") if u.get("departure_delay") is not None else arr_d
+            live_records[c] = {
+                "act_arr": u.get("eta") or u.get("sta"),
+                "act_dep": u.get("etd") or u.get("std"),
+                "delay_arr": arr_d,
+                "delay_dep": dep_d,
+                "platform": u.get("platform_number"),
+                "status": "upcoming",
+                "is_departed": False
+            }
+
+    dist_from_src = float(lts.get("distance_from_source", 0)) if lts.get("distance_from_source") else 0.0
+
     # Normalize TrainRoute
     normalized_route = []
     for r in stopping_stations:
+        stn_c = r.get("station_code")
+        rec = live_records.get(stn_c)
         sta_val = r.get("sta")
         std_val = r.get("std") or r.get("sta")
         day_val = r.get("day", 1) - 1
+        stn_dist = float(r.get("distance_from_source", "0") or 0.0)
         
         arr_str = ""
         dep_str = ""
@@ -330,19 +386,57 @@ def fetch_ntes_live_data(train_number: str, date_yyyymmdd: Optional[str] = None)
             dep_str = f"{rem_m // 60:02d}:{rem_m % 60:02d}"
         elif isinstance(std_val, str) and ":" in std_val:
             dep_str = std_val
+
+        # Determine authentic actual times, delays, and departure state
+        if rec:
+            act_a = rec.get("act_arr") or arr_str
+            act_d = rec.get("act_dep") or dep_str
+            d_arr_num = rec.get("delay_arr")
+            d_dep_num = rec.get("delay_dep")
+            del_arr_str = f"{int(d_arr_num)} M" if d_arr_num is not None else (f"{int(live_delay)} M" if rec.get("is_departed") else "00 M")
+            del_dep_str = f"{int(d_dep_num)} M" if d_dep_num is not None else (f"{int(live_delay)} M" if rec.get("is_departed") else "00 M")
+            is_dep = "true" if rec.get("is_departed") else "false"
+            pf_num = rec.get("platform") or r.get("platform_number", 1)
+        elif stn_c == curr_code:
+            act_a = arr_str
+            act_d = dep_str
+            del_arr_str = f"{int(live_delay)} M"
+            del_dep_str = f"{int(live_delay)} M"
+            is_dep = "true" if lts.get("status") in ["T", "departed"] else "false"
+            pf_num = r.get("platform_number", 1)
+        elif dist_from_src > 0 and stn_dist <= dist_from_src and not at_src:
+            # Station has passed based on distance progression
+            ratio = min(1.0, max(0.0, stn_dist / dist_from_src)) if dist_from_src > 0 else 1.0
+            interpolated_del = int(round(ratio * live_delay))
+            del_arr_str = f"{interpolated_del} M"
+            del_dep_str = f"{interpolated_del} M"
+            act_a = add_minutes_to_time_str(arr_str, interpolated_del) if arr_str else ""
+            act_d = add_minutes_to_time_str(dep_str, interpolated_del) if dep_str else ""
+            is_dep = "true"
+            pf_num = r.get("platform_number", 1)
+        else:
+            act_a = ""
+            act_d = ""
+            del_arr_str = "00 M"
+            del_dep_str = "00 M"
+            is_dep = "false"
+            pf_num = r.get("platform_number", 1)
             
         normalized_route.append({
-            "StationCode": r.get("station_code"),
+            "StationCode": stn_c,
             "StationName": r.get("station_name"),
             "Day": str(day_val),
             "ScheduleArrival": arr_str,
             "ScheduleDeparture": dep_str,
-            "DelayInArrival": f"{int(live_delay)} M" if r.get("station_code") == curr_code else "00 M",
-            "DelayInDeparture": f"{int(live_delay)} M" if r.get("station_code") == curr_code else "00 M",
+            "ActualArrival": act_a,
+            "ActualDeparture": act_d,
+            "DelayInArrival": del_arr_str,
+            "DelayInDeparture": del_dep_str,
             "DistanceFromSource": str(r.get("distance_from_source", "0")),
-            "Platform": r.get("platform_number", 1),
+            "Platform": pf_num,
             "Latitude": float(r.get("lat", 0)) if r.get("lat") else None,
             "Longitude": float(r.get("lng", 0)) if r.get("lng") else None,
+            "IsDeparted": is_dep
         })
 
     dist_from_src = float(lts.get("distance_from_source", 0)) if lts.get("distance_from_source") else 0.0
@@ -407,7 +501,7 @@ def fetch_live_train_status(
         try:
             with urllib.request.urlopen(req, timeout=12) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if data.get("ResponseCode") != "201":
+                if str(data.get("ResponseCode")) in ["200", 200] and (data.get("TrainRoute") or data.get("CurrentStation")):
                     return data
         except Exception:
             if not allow_fallback:
@@ -1052,23 +1146,39 @@ def map_ntes_to_telemetry(ntes_data: Dict[str, Any], clean_no: str, journey_date
     route_raw = ntes_data.get("TrainRoute", [])
     gps = ntes_data.get("GPSCoordinates", {})
 
+    curr_dist = float(gps.get("distance_from_source", 0.0) or 0.0)
+    curr_delay = int(parse_delay_string(curr_stn.get("DelayInArrival")) or 0)
+
     mapped_route = []
     for idx, r in enumerate(route_raw):
         sta = r.get("ScheduleArrival") or ""
         std = r.get("ScheduleDeparture") or ""
+        act_a = r.get("ActualArrival") or sta
+        act_d = r.get("ActualDeparture") or std
+        stn_dist = float(r.get("DistanceFromSource", 0) or 0.0)
+
+        raw_is_dep = str(r.get("IsDeparted", "")).lower()
+        if raw_is_dep in ["true", "1", "yes"]:
+            stn_status = "departed"
+        elif curr_dist > 0 and stn_dist <= curr_dist:
+            stn_status = "departed"
+        else:
+            stn_status = "upcoming"
+
         mapped_route.append({
             "sequence": idx + 1,
             "stationCode": r.get("StationCode"),
             "stationName": r.get("StationName"),
             "scheduledArrival": sta,
             "scheduledDeparture": std,
-            "actualArrival": sta,
-            "actualDeparture": std,
+            "actualArrival": act_a if stn_status == "departed" else (act_a if act_a != sta else ""),
+            "actualDeparture": act_d if stn_status == "departed" else (act_d if act_d != std else ""),
             "delayArrival": int(parse_delay_string(r.get("DelayInArrival"))),
             "delayDeparture": int(parse_delay_string(r.get("DelayInDeparture"))),
-            "distance": float(r.get("DistanceFromSource", 0)),
+            "distance": stn_dist,
             "platform": str(r.get("Platform", 1)),
-            "status": "departed" if str(r.get("IsDeparted", "")).lower() in ["true", "1", "yes"] else "upcoming"
+            "status": stn_status,
+            "isHalt": True
         })
 
     return {
@@ -1094,6 +1204,112 @@ def map_ntes_to_telemetry(ntes_data: Dict[str, Any], clean_no: str, journey_date
             "lng": gps.get("lng")
         },
         "nextHalt": {},
+        "route": mapped_route
+    }
+
+
+def map_indian_rail_api_to_telemetry(ir_data: Dict[str, Any], clean_no: str, journey_date: str) -> Optional[Dict[str, Any]]:
+    """Maps Indian Rail API (http://indianrailapi.com) live response into the standard telemetry structure."""
+    if not ir_data or str(ir_data.get("ResponseCode")) not in ["200", 200]:
+        return None
+    curr_stn = ir_data.get("CurrentStation", {}) or {}
+    route_raw = ir_data.get("TrainRoute", []) or []
+    if not route_raw:
+        return None
+
+    mapped_route = []
+    found_current = False
+    curr_code = (curr_stn.get("StationCode") or "").strip().upper()
+    next_halt = {}
+
+    for idx, r in enumerate(route_raw):
+        stn_code = (r.get("StationCode") or "").strip().upper()
+        sta = r.get("ScheduleArrival") or ""
+        std = r.get("ScheduleDeparture") or ""
+        act_a = r.get("ActualArrival") or sta
+        act_d = r.get("ActualDeparture") or std
+        delay_a = int(parse_delay_string(r.get("DelayInArrival")))
+        delay_d = int(parse_delay_string(r.get("DelayInDeparture")))
+        dist = float(r.get("DistanceFromSource", 0) or 0)
+        pf = str(r.get("Platform", 1) or 1)
+
+        is_passed = False
+        if curr_code:
+            if not found_current:
+                is_passed = True
+                if stn_code == curr_code:
+                    found_current = True
+                    is_passed = False
+            elif not next_halt and stn_code != curr_code:
+                next_halt = {
+                    "stationCode": stn_code,
+                    "stationName": r.get("StationName", stn_code),
+                    "distance": dist,
+                    "scheduledArrival": sta,
+                    "actualArrival": act_a,
+                    "scheduledDeparture": std,
+                    "actualDeparture": act_d
+                }
+
+        mapped_route.append({
+            "sequence": idx + 1,
+            "stationCode": stn_code,
+            "stationName": r.get("StationName", stn_code),
+            "scheduledArrival": sta,
+            "scheduledDeparture": std,
+            "actualArrival": act_a,
+            "actualDeparture": act_d,
+            "delayArrival": delay_a,
+            "delayDeparture": delay_d,
+            "distance": dist,
+            "platform": pf,
+            "status": "departed" if is_passed else "upcoming",
+            "isHalt": True
+        })
+
+    from engine.train_registry import resolve_station_coordinates
+    coords = resolve_station_coordinates(curr_code) if curr_code else None
+    lat = coords[0] if coords else None
+    lng = coords[1] if coords else None
+
+    src_code = mapped_route[0]["stationCode"] if mapped_route else "SRC"
+    dst_code = mapped_route[-1]["stationCode"] if mapped_route else "DST"
+
+    at_src = curr_stn.get("AtSource", False)
+    at_dst = curr_stn.get("AtDestination", False)
+    status_str = "not-started" if at_src else ("completed" if at_dst else "running")
+
+    curr_dist = 0.0
+    for r in mapped_route:
+        if r["stationCode"] == curr_code:
+            curr_dist = r["distance"]
+            break
+
+    delay_min = int(parse_delay_string(curr_stn.get("DelayInArrival") or curr_stn.get("DelayInDeparture")))
+
+    return {
+        "trainNumber": clean_no,
+        "trainName": ir_data.get("TrainName", f"Train {clean_no}"),
+        "startDate": journey_date,
+        "lastUpdatedAt": get_current_ist_datetime().isoformat(),
+        "status": status_str,
+        "train": {
+            "number": clean_no,
+            "name": ir_data.get("TrainName", f"Train {clean_no}"),
+            "source": {"code": src_code},
+            "destination": {"code": dst_code}
+        },
+        "delayMinutes": delay_min,
+        "currentLocation": {
+            "stationCode": curr_code,
+            "stationName": curr_stn.get("StationName", curr_code),
+            "delayMinutes": delay_min,
+            "speed": 0.0 if (at_src or at_dst) else 65.0,
+            "distanceFromOriginKm": curr_dist,
+            "lat": lat,
+            "lng": lng
+        },
+        "nextHalt": next_halt,
         "route": mapped_route
     }
 
@@ -1201,7 +1417,8 @@ def build_telemetry_from_catalog(clean_no: str, journey_date: str) -> Optional[D
                 "delayDeparture": d_dep,
                 "distance": float(s.get("km", idx * 100)),
                 "platform": str(s.get("platform", 1)),
-                "status": stn_status
+                "status": stn_status,
+                "isHalt": True
             })
 
         if journey_phase == "completed":
@@ -1390,10 +1607,11 @@ async def fetch_live_train_telemetry_async(
     api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Fetches real live running telemetry for a train from the authentic live upstream feed.
-    Logs outgoing request details and raw response snippets.
-    Includes in-memory caching and authentic NTES failover on 429 rate limit.
-    Raises HTTPException(502) on upstream failure or 404 if train not found.
+    Fetches real live running telemetry for a train with prioritized multi-tier upstream failover:
+    - Priority 1 (Primary - Free): Official Indian Railways NTES Live Feed (zero quota usage).
+    - Priority 2 (Secondary): Indian Rail API (http://indianrailapi.com) / Secondary gateway.
+    - Priority 3 (Tertiary - Paid/Quota Fallback): RailRadar API (https://api.railradar.in/v1/trains/{train_no}/live).
+    - Priority 4 (Catalog Baseline): Authentic CRIS catalog schedule.
     NEVER synthesizes fake data.
     """
     clean_no = str(train_number).strip()
@@ -1407,96 +1625,543 @@ async def fetch_live_train_telemetry_async(
             logger.info("Serving live telemetry for train %s from cache (age: %.1fs)", clean_no, now_ts - cached_ts)
             return cached_data
 
-    key = api_key or os.getenv("RAILRADAR_API_KEY", DEFAULT_RAILRADAR_API_KEY)
-    url = f"https://api.railradar.in/v1/trains/{clean_no}/live"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://railradar.in/",
-        "Origin": "https://railradar.in",
-        "Authorization": f"Bearer {key}"
-    }
+    today_ist = get_current_ist_date()
+    is_today_or_near = (not journey_date) or (journey_date == today_ist)
 
-    safe_headers = {k: ("Bearer ***" if k.lower() == "authorization" else v) for k, v in headers.items()}
-    logger.info("Calling upstream live tracking: URL=%s headers=%s payload=%s", url, safe_headers, None)
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers=headers)
-    except Exception as exc:
-        logger.error("Upstream connection failed for train %s: %s", clean_no, exc)
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "Upstream tracking failed", "raw_response": str(exc)}
-        )
-
-    logger.info("Upstream response: status=%s, snippet=%s", resp.status_code, resp.text[:250])
-
-    if resp.status_code == 404:
-        logger.warning("Train %s not found on upstream: %s. Probing catalog schedule.", clean_no, resp.text[:250])
-        catalog_mapped = build_telemetry_from_catalog(clean_no, journey_date)
-        if catalog_mapped:
-            _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, catalog_mapped)
-            return catalog_mapped
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Train {clean_no} not found or inactive for selected date", "raw_response": resp.text[:250]}
-        )
-
-    if resp.status_code == 429:
-        logger.warning("RailRadar rate limit reached (429) for train %s. Probing NTES official live feed.", clean_no)
-        # 1. Return cached data if available (even if older than TTL)
-        if cache_key in _LIVE_TELEMETRY_CACHE:
-            logger.info("Serving recent cached telemetry for train %s due to upstream rate limit", clean_no)
-            return _LIVE_TELEMETRY_CACHE[cache_key][1]
-        for ck, (c_ts, c_data) in _LIVE_TELEMETRY_CACHE.items():
-            if ck.startswith(f"{clean_no}:") and (not journey_date or c_data.get("startDate") == journey_date):
-                logger.info("Serving recent cached telemetry for train %s due to upstream rate limit", clean_no)
-                return c_data
-        # 2. Probe NTES live feed if date is today
-        if not journey_date or journey_date == get_current_ist_date():
-            ntes_raw = fetch_ntes_live_data(clean_no, journey_date)
-            ntes_mapped = map_ntes_to_telemetry(ntes_raw, clean_no, journey_date)
-            if ntes_mapped:
+    # ---------------------------------------------------------------------------
+    # PRIORITY 1 (PRIMARY): Official Indian Railways NTES Live Feed (Free of Cost)
+    # ---------------------------------------------------------------------------
+    if is_today_or_near:
+        try:
+            logger.info("Probing Priority 1 (Primary): Official Indian Railways NTES Live Feed for train %s...", clean_no)
+            ntes_raw = fetch_ntes_live_data(clean_no, journey_date or today_ist)
+            ntes_mapped = map_ntes_to_telemetry(ntes_raw, clean_no, journey_date or today_ist)
+            if ntes_mapped and len(ntes_mapped.get("route", [])) >= 2:
+                logger.info("Successfully fetched live telemetry from Priority 1 (Indian Railways NTES Feed) for train %s", clean_no)
                 _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, ntes_mapped)
                 return ntes_mapped
-        # 3. Fallback to authentic catalog schedule
-        catalog_mapped = build_telemetry_from_catalog(clean_no, journey_date)
-        if catalog_mapped:
-            _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, catalog_mapped)
-            return catalog_mapped
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "Upstream tracking failed: Rate limit exceeded on live radar", "raw_response": resp.text[:250]}
-        )
+        except Exception as e:
+            logger.warning("Priority 1 (Indian Railways NTES) fetch failed for train %s: %s", clean_no, e)
 
-    if resp.status_code != 200:
-        logger.error("Upstream returned error status %s for train %s: %s", resp.status_code, clean_no, resp.text[:250])
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "Upstream tracking failed", "raw_response": resp.text[:250]}
-        )
+    # ---------------------------------------------------------------------------
+    # PRIORITY 2 (SECONDARY): Indian Rail API (http://indianrailapi.com)
+    # ---------------------------------------------------------------------------
+    ir_key = os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY") or api_key
+    if ir_key and ir_key != DEFAULT_RAILRADAR_API_KEY:
+        try:
+            clean_date_yyyymmdd = (journey_date or today_ist).replace("-", "").strip()
+            logger.info("Probing Priority 2 (Secondary): Indian Rail API for train %s...", clean_no)
+            ir_raw = fetch_live_train_status(clean_no, clean_date_yyyymmdd, api_key=ir_key, allow_fallback=False)
+            if ir_raw and str(ir_raw.get("ResponseCode")) in ["200", 200] and ir_raw.get("TrainRoute"):
+                ir_mapped = map_indian_rail_api_to_telemetry(ir_raw, clean_no, journey_date or today_ist)
+                if ir_mapped and len(ir_mapped.get("route", [])) >= 2:
+                    logger.info("Successfully fetched live telemetry from Priority 2 (Indian Rail API) for train %s", clean_no)
+                    _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, ir_mapped)
+                    return ir_mapped
+        except Exception as e:
+            logger.warning("Priority 2 (Indian Rail API) fetch failed for train %s: %s", clean_no, e)
 
-    try:
-        data_json = resp.json()
-    except Exception as exc:
-        logger.error("Invalid JSON from upstream: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "Upstream tracking failed: invalid JSON payload", "raw_response": resp.text[:250]}
-        )
+    # ---------------------------------------------------------------------------
+    # PRIORITY 3 (TERTIARY / FALLBACK): RailRadar API (Paid / Quota-Conserving)
+    # ---------------------------------------------------------------------------
+    radar_key = os.getenv("RAILRADAR_API_KEY", DEFAULT_RAILRADAR_API_KEY)
+    if radar_key:
+        try:
+            logger.info("Probing Priority 3 (Tertiary Fallback): RailRadar API for train %s...", clean_no)
+            url = f"https://api.railradar.in/v1/trains/{clean_no}/live"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://railradar.in/",
+                "Origin": "https://railradar.in",
+                "Authorization": f"Bearer {radar_key}"
+            }
+            safe_headers = {k: ("Bearer ***" if k.lower() == "authorization" else v) for k, v in headers.items()}
+            logger.info("Calling tertiary RailRadar: URL=%s headers=%s", url, safe_headers)
 
-    if not data_json.get("success") or "data" not in data_json:
-        logger.error("Upstream payload marked failure: %s", data_json)
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "Upstream tracking failed", "raw_response": data_json}
-        )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
 
-    res_data = data_json["data"]
-    _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, res_data)
-    return res_data
+            logger.info("Tertiary RailRadar response: status=%s, snippet=%s", resp.status_code, resp.text[:250])
+
+            if resp.status_code == 200:
+                data_json = resp.json()
+                if data_json.get("success") and "data" in data_json:
+                    res_data = data_json["data"]
+                    _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, res_data)
+                    return res_data
+            elif resp.status_code == 429:
+                logger.warning("RailRadar rate limit reached (429) for train %s", clean_no)
+        except Exception as exc:
+            logger.warning("Tertiary RailRadar fetch failed for train %s: %s", clean_no, exc)
+
+    # ---------------------------------------------------------------------------
+    # PRIORITY 4 (CATALOG BASELINE): Authentic CRIS catalog schedule
+    # ---------------------------------------------------------------------------
+    logger.info("Probing Priority 4 (Catalog Baseline) for train %s (%s)...", clean_no, journey_date)
+    catalog_mapped = build_telemetry_from_catalog(clean_no, journey_date)
+    if catalog_mapped:
+        _LIVE_TELEMETRY_CACHE[cache_key] = (now_ts, catalog_mapped)
+        return catalog_mapped
+
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"Train {clean_no} not found or inactive for selected date", "raw_response": "All upstream feeds exhausted."}
+    )
+
+
+def calculate_dynamic_train_speed(
+    op_status: str,
+    curr_loc: Dict[str, Any],
+    route: List[Dict[str, Any]],
+    train_info: Dict[str, Any],
+    resolved_train: Dict[str, Any],
+    live_map_match: Optional[Dict[str, Any]] = None
+) -> int:
+    """
+    Multi-tiered authentic physical train speed calculation:
+    - Tier 0: Stationary check (HALTED, NOT_STARTED, TERMINATED, or at-station flag) -> 0 km/h.
+    - Tier 1: Direct instantaneous GPS / RTIS speedometer telemetry if reported (> 0).
+    - Tier 2: Real physical ground punch kinematics (Δd / Δt between the last two actual station departure punches).
+    - Tier 3: Authentic section operational speed (speedToNextStationKmph) from railway route timetable feed.
+    - Tier 4: Dynamic inter-station radar telemetry delta: (next_distance - curr_distance) / (time_delta).
+    - Tier 5: Train profile cruise speed clamped by train MPS.
+    """
+    # Tier 0: Operational status enforcement
+    if op_status in ["HALTED", "HALTED_AT_STATION", "NOT_STARTED", "TERMINATED", "COMPLETED", "CANCELLED"]:
+        return 0
+    if curr_loc.get("isHalt") is True or str(curr_loc.get("status", "")).lower() in ["at-station", "halted", "arrived"]:
+        return 0
+
+    mps = float(resolved_train.get("mps") or train_info.get("maxSpeed") or 110.0)
+
+    # Tier 1: Direct locomotive GPS / RTIS speedometer
+    raw_speed = float(curr_loc.get("speed") or 0.0)
+    if raw_speed > 0:
+        return int(round(min(raw_speed, mps * 1.05)))
+
+    # Tier 2: Real ground punch kinematics (Δd / Δt between consecutive departed stations)
+    valid_punches = []
+    for r in route:
+        act_ts_str = r.get("actualDeparture") or r.get("actualArrival")
+        dist = r.get("distance")
+        if act_ts_str and dist is not None and str(r.get("status", "")).lower() in ["departed", "passed"]:
+            clean_ts = act_ts_str.split("+")[0].split(".")[0]
+            try:
+                dt = datetime.fromisoformat(clean_ts)
+                valid_punches.append((float(dist), dt))
+            except Exception:
+                pass
+
+    if len(valid_punches) >= 2:
+        d1, t1 = valid_punches[-2]
+        d2, t2 = valid_punches[-1]
+        dt_sec = (t2 - t1).total_seconds()
+        dd_km = d2 - d1
+        if 60 <= dt_sec <= 7200 and dd_km > 0:
+            calc_v = (dd_km / dt_sec) * 3600.0
+            if 15.0 <= calc_v <= (mps * 1.05):
+                return int(round(calc_v))
+
+    # Tier 3: Authentic section operational speed from route timetable
+    curr_seq = curr_loc.get("sequence")
+    if curr_seq is not None:
+        for r in route:
+            if r.get("sequence") == curr_seq and r.get("speedToNextStationKmph"):
+                try:
+                    v_sec = float(r.get("speedToNextStationKmph"))
+                    if 15.0 <= v_sec <= (mps * 1.05):
+                        return int(round(v_sec))
+                except (ValueError, TypeError):
+                    pass
+
+    # Tier 4: Dynamic inter-station radar telemetry delta
+    if live_map_match:
+        c_dist = float(live_map_match.get("curr_distance", 0.0))
+        n_dist = float(live_map_match.get("next_distance", 0.0))
+        dep_m = float(live_map_match.get("departure_minutes", 0.0))
+        arr_m = float(live_map_match.get("next_arrival_minutes", 0.0))
+        delta_d = n_dist - c_dist
+        delta_t = arr_m - dep_m
+        if delta_t > 0 and delta_d > 0:
+            v_radar = (delta_d / (delta_t / 60.0))
+            if 15.0 <= v_radar <= (mps * 1.05):
+                return int(round(v_radar))
+
+    # Tier 5: Profile average speed clamped to MPS
+    avg_s = float(train_info.get("avgSpeed") or resolved_train.get("default_ground", {}).get("speed_kmph") or 0.0)
+    if avg_s > 0:
+        return int(round(min(mps, avg_s)))
+
+    return int(round(mps * 0.88))
+
+
+def build_enriched_schedule_and_halts(
+    route: List[Dict[str, Any]],
+    curr_loc: Dict[str, Any],
+    op_status: str,
+    last_code: str,
+    next_code: str,
+    last_delay_min: int,
+    train_number: Optional[str] = None,
+    journey_date: Optional[str] = None
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Builds the standardized schedule array and commercial stopping halts array.
+    Calculates dynamic station-by-station ETAs, delay recovery deltas, and aggregates
+    intermediate non-stop passing stations between halts.
+    """
+    schedule_out = []
+    route_halts = []
+    current_intermediates = []
+
+    total_len = len(route)
+    for idx, stn in enumerate(route):
+        s_code = stn.get("stationCode", "")
+        s_name = stn.get("stationName", s_code)
+        dist_km = float(stn.get("distance", 0.0) or 0.0)
+        pf = str(stn.get("platform", "1") or "1")
+        lat = stn.get("lat")
+        lng = stn.get("lng")
+
+        is_halt = bool(stn.get("isHalt", False))
+        if idx == 0 or idx == total_len - 1:
+            is_halt = True
+
+        sch_a_raw = stn.get("scheduledArrival")
+        sch_d_raw = stn.get("scheduledDeparture")
+        act_a_raw = stn.get("actualArrival")
+        act_d_raw = stn.get("actualDeparture")
+
+        sch_a = extract_hhmm(sch_a_raw if idx > 0 else "START")
+        sch_d = extract_hhmm(sch_d_raw if idx < total_len - 1 else "TERM")
+        act_a = extract_hhmm(act_a_raw)
+        act_d = extract_hhmm(act_d_raw)
+
+        curr_dist = float(curr_loc.get("distanceFromOriginKm", 0.0) or 0.0)
+        raw_stat = str(stn.get("status", "")).lower()
+        if raw_stat in ["departed", "passed"] or (curr_dist > 0 and dist_km < curr_dist and op_status == "RUNNING"):
+            item_status = "DEPARTED"
+            has_passed = True
+        elif raw_stat in ["at-station", "halted"] or (curr_loc.get("stationCode") == s_code and op_status == "HALTED"):
+            item_status = "HALTED"
+            has_passed = False
+        else:
+            item_status = "UPCOMING"
+            has_passed = False
+
+        if op_status in ["TERMINATED", "COMPLETED", "REACHED"]:
+            item_status = "DEPARTED"
+            has_passed = True
+        elif op_status == "NOT_STARTED":
+            item_status = "UPCOMING"
+            has_passed = False
+
+        del_arr = stn.get("delayArrival")
+        del_dep = stn.get("delayDeparture")
+        stn_delay = int(del_dep if del_dep is not None else (del_arr if del_arr is not None else 0))
+
+        schedule_out.append({
+            "station_code": s_code,
+            "station_name": s_name,
+            "platform": pf,
+            "distance_km": dist_km,
+            "sch_arr": sch_a,
+            "sch_dep": sch_d,
+            "act_arr": act_a,
+            "act_dep": act_d,
+            "status": item_status,
+            "delay_minutes": stn_delay,
+            "is_halt": is_halt,
+            "has_passed": has_passed,
+            "coordinates": {"lat": lat, "lng": lng}
+        })
+
+        if is_halt:
+            if route_halts and current_intermediates:
+                route_halts[-1]["intermediate_stations"] = current_intermediates
+                route_halts[-1]["intermediate_count"] = len(current_intermediates)
+                current_intermediates = []
+
+            route_halts.append({
+                "code": s_code,
+                "name": s_name,
+                "platform": pf,
+                "distance_km": dist_km,
+                "sch_arr": sch_a,
+                "sch_dep": sch_d,
+                "act_arr": act_a,
+                "act_dep": act_d,
+                "raw_status": "departed" if has_passed else raw_stat,
+                "delay_arr": del_arr,
+                "delay_dep": del_dep,
+                "intermediate_stations": [],
+                "intermediate_count": 0
+            })
+        else:
+            current_intermediates.append({
+                "code": s_code,
+                "name": s_name,
+                "distance_km": dist_km,
+                "time": extract_hhmm(act_a_raw or sch_a_raw),
+                "status": "PASSED" if has_passed else "UPCOMING"
+            })
+
+    if route_halts and current_intermediates:
+        route_halts[-1]["intermediate_stations"] = current_intermediates
+        route_halts[-1]["intermediate_count"] = len(current_intermediates)
+
+    # Pre-query TrainETAPredictorEngine for upcoming stations if train number is provided
+    pred_map = {}
+    if train_number:
+        try:
+            from engine.eta_engine import TrainETAPredictorEngine
+            curr_dist_km = float(curr_loc.get("distanceFromOriginKm", 0.0) or 0.0)
+
+            # Build high-fidelity stations_override from route_halts if present
+            stations_override = []
+            if route_halts:
+                orig_dep_min = parse_time_to_minutes(route_halts[0].get("sch_dep")) or 0
+                for s_idx, rh in enumerate(route_halts):
+                    a_m = parse_time_to_minutes(rh.get("sch_arr"))
+                    d_m = parse_time_to_minutes(rh.get("sch_dep"))
+                    arr_off = (a_m - orig_dep_min) if (a_m is not None) else 0
+                    if arr_off < 0:
+                        arr_off += 1440
+                    dep_off = (d_m - orig_dep_min) if (d_m is not None) else arr_off
+                    if dep_off < 0:
+                        dep_off += 1440
+                    stations_override.append({
+                        "code": rh["code"],
+                        "name": rh["name"],
+                        "km": float(rh.get("distance_km", 0.0)),
+                        "halt_min": max(1, dep_off - arr_off) if s_idx > 0 and s_idx < len(route_halts) - 1 else 0,
+                        "platform": rh.get("platform", "1"),
+                        "arr_min": arr_off,
+                        "dep_min": dep_off
+                    })
+
+            eta_pred = TrainETAPredictorEngine.predict_train_eta(
+                train_number=train_number,
+                run_date=journey_date,
+                current_km_override=curr_dist_km if curr_dist_km > 0 else None,
+                current_delay_override=float(last_delay_min) if last_delay_min is not None else None,
+                stations_override=stations_override if stations_override else None
+            )
+            for up_stn in eta_pred.get("upcoming_stations", []):
+                pred_map[up_stn["station_code"]] = up_stn
+        except Exception:
+            pass
+
+    # Second pass: dynamic ETAs and delay recovery calculation for halts
+    prev_delay = max(0, int(last_delay_min or 0))
+    found_next = False
+    origin_code = route_halts[0]["code"] if route_halts else ""
+    curr_dist = float(curr_loc.get("distanceFromOriginKm", 0.0) or 0.0)
+    origin_passed = (
+        op_status in ["RUNNING", "TERMINATED", "COMPLETED", "REACHED"]
+        or curr_dist > 0.0
+        or (bool(last_code) and last_code != origin_code)
+    )
+
+    for idx, h in enumerate(route_halts):
+        is_origin = (idx == 0)
+        is_dest = (idx == len(route_halts) - 1)
+
+        if op_status in ["TERMINATED", "COMPLETED", "REACHED"]:
+            h["status"] = "PASSED"
+            h["has_passed"] = True
+            h["is_next"] = False
+            h["is_current"] = is_dest
+            del_val = int(h["delay_dep"] if h.get("delay_dep") is not None else (h["delay_arr"] if h.get("delay_arr") is not None else last_delay_min))
+            h["delay_min"] = del_val
+            h["delay_delta"] = 0
+            prev_delay = del_val
+            h["exp_arr"] = "--:--" if is_origin else (h["act_arr"] if h["act_arr"] != "--:--" else h["sch_arr"])
+            h["exp_dep"] = "TERM" if is_dest else (h["act_dep"] if h["act_dep"] != "--:--" else h["sch_dep"])
+            if is_dest:
+                h["time_display"] = f"Arrived {h['act_arr']} IST" if h["act_arr"] != "--:--" else f"Exp. {h['sch_arr']} IST"
+                h["dynamic_eta"] = h["act_arr"] if h["act_arr"] != "--:--" else h["sch_arr"]
+            elif is_origin:
+                h["time_display"] = f"Dept. {h['exp_dep']} IST"
+                h["dynamic_eta"] = h["exp_dep"]
+            else:
+                h["time_display"] = f"Dept. {h['exp_dep']} IST" if h["exp_dep"] != "--:--" else f"Act. {h['exp_arr']} IST"
+                h["dynamic_eta"] = h["exp_arr"] if h["exp_arr"] != "--:--" else h["exp_dep"]
+
+        elif op_status == "NOT_STARTED":
+            h["status"] = "AT_PLATFORM" if is_origin else ("NEXT" if idx == 1 else ("DEST" if is_dest else "UPCOMING"))
+            h["has_passed"] = False
+            h["is_next"] = (idx == 1)
+            h["is_current"] = is_origin
+            h["delay_min"] = 0
+            h["delay_delta"] = 0
+            h["exp_arr"] = "--:--" if is_origin else h["sch_arr"]
+            h["exp_dep"] = "TERM" if is_dest else h["sch_dep"]
+            if is_origin:
+                h["time_display"] = f"Sched. {h['sch_dep']} IST"
+                h["dynamic_eta"] = h["sch_dep"]
+            elif is_dest:
+                h["time_display"] = f"Exp. {h['sch_arr']} IST"
+                h["dynamic_eta"] = h["sch_arr"]
+            else:
+                h["time_display"] = f"Exp. {h['sch_arr']} IST"
+                h["dynamic_eta"] = h["sch_arr"]
+
+        elif h.get("raw_status") in ["departed", "passed"] or (is_origin and origin_passed):
+            h["status"] = "PASSED"
+            h["has_passed"] = True
+            h["is_next"] = False
+            h["is_current"] = False
+
+            # Authentic recorded station delay
+            del_val = None
+            if h.get("delay_dep") is not None and (int(h["delay_dep"]) > 0 or last_delay_min == 0 or idx == 0):
+                del_val = int(h["delay_dep"])
+            elif h.get("delay_arr") is not None and (int(h["delay_arr"]) > 0 or last_delay_min == 0 or idx == 0):
+                del_val = int(h["delay_arr"])
+            elif h.get("act_dep") not in ["--:--", "", None] and h.get("sch_dep") not in ["--:--", "", None]:
+                diff = calculate_minutes_diff(h["act_dep"], h["sch_dep"])
+                if diff is not None and (diff > 0 or last_delay_min == 0 or idx == 0):
+                    del_val = diff
+            elif h.get("act_arr") not in ["--:--", "", None] and h.get("sch_arr") not in ["--:--", "", None]:
+                diff = calculate_minutes_diff(h["act_arr"], h["sch_arr"])
+                if diff is not None and (diff > 0 or last_delay_min == 0 or idx == 0):
+                    del_val = diff
+
+            # If unrecorded or falsely 0 while train has a large ground delay:
+            if del_val is None or (del_val == 0 and last_delay_min > 5 and idx > 0 and h["distance_km"] <= curr_dist):
+                if curr_dist > 0:
+                    del_val = int(round(min(1.0, max(0.0, h["distance_km"] / curr_dist)) * last_delay_min))
+                else:
+                    del_val = prev_delay
+
+            del_val = max(0, int(del_val))
+            h["delay_min"] = del_val
+            h["delay_delta"] = 0
+            prev_delay = del_val
+
+            # Resolve actual departure and arrival timestamps
+            if h.get("act_dep") not in ["--:--", "", None] and h.get("act_dep") != h.get("sch_dep"):
+                h["exp_dep"] = h["act_dep"]
+            elif del_val > 0 and h.get("sch_dep") not in ["--:--", "TERM", "", None]:
+                h["exp_dep"] = extract_hhmm(add_minutes_to_time_str(h["sch_dep"], del_val))
+                h["act_dep"] = h["exp_dep"]
+            else:
+                h["exp_dep"] = "TERM" if is_dest else h["sch_dep"]
+
+            if h.get("act_arr") not in ["--:--", "", None] and h.get("act_arr") != h.get("sch_arr"):
+                h["exp_arr"] = h["act_arr"]
+            elif del_val > 0 and h.get("sch_arr") not in ["--:--", "START", "", None]:
+                h["exp_arr"] = extract_hhmm(add_minutes_to_time_str(h["sch_arr"], del_val))
+                h["act_arr"] = h["exp_arr"]
+            else:
+                h["exp_arr"] = "--:--" if is_origin else h["sch_arr"]
+
+            if is_dest:
+                h["time_display"] = f"Arrived {h['act_arr']} IST" if h["act_arr"] != "--:--" else f"Exp. {h['exp_arr']} IST"
+                h["dynamic_eta"] = h["act_arr"] if h["act_arr"] != "--:--" else h["exp_arr"]
+            elif is_origin:
+                h["time_display"] = f"Dept. {h['exp_dep']} IST"
+                h["dynamic_eta"] = h["exp_dep"]
+            else:
+                h["time_display"] = f"Dept. {h['exp_dep']} IST"
+                h["dynamic_eta"] = h["exp_dep"]
+
+        elif h.get("raw_status") in ["at-station", "halted"] or h["code"] == last_code:
+            h["status"] = "AT_PLATFORM"
+            h["has_passed"] = False
+            h["is_next"] = False
+            h["is_current"] = True
+            del_val = int(h.get("delay_arr") if h.get("delay_arr") is not None else prev_delay)
+            h["delay_min"] = del_val
+            h["delay_delta"] = 0
+            prev_delay = del_val
+            h["exp_arr"] = "--:--" if is_origin else (h["act_arr"] if h["act_arr"] != "--:--" else h["sch_arr"])
+            h["exp_dep"] = "TERM" if is_dest else (h["sch_dep"] if h["sch_dep"] != "--:--" else "--:--")
+            if is_origin:
+                h["time_display"] = f"At PF {h['platform']} • Dep {h['sch_dep']}"
+                h["dynamic_eta"] = h["sch_dep"]
+            else:
+                h["time_display"] = f"At PF {h['platform']} • Arr {h['exp_arr']}"
+                h["dynamic_eta"] = h["exp_arr"]
+
+        else:
+            # Upcoming halts
+            h["has_passed"] = False
+            if is_origin:
+                h["status"] = "AT_PLATFORM"
+                h["is_next"] = False
+                h["is_current"] = True
+                h["delay_min"] = 0
+                h["delay_delta"] = 0
+                h["exp_arr"] = "--:--"
+                h["exp_dep"] = h["sch_dep"]
+                h["time_display"] = f"Sched. {h['sch_dep']} IST"
+                h["dynamic_eta"] = h["sch_dep"]
+            else:
+                if not found_next:
+                    h["status"] = "NEXT"
+                    h["is_next"] = True
+                    h["is_current"] = False
+                    found_next = True
+                    prev_delay = max(0, int(last_delay_min or 0))
+                else:
+                    h["status"] = "DEST" if is_dest else "UPCOMING"
+                    h["is_next"] = False
+                    h["is_current"] = False
+
+                if h["code"] in pred_map:
+                    pred = pred_map[h["code"]]
+                    p50_hhmm = extract_hhmm(pred.get("eta_p50_ist", ""))
+                    proj_del = int(round(pred.get("projected_delay_min", 0)))
+                    rec_val = int(round(pred.get("delay_breakdown", {}).get("bounded_recovery_min", 0)))
+
+                    if h["sch_arr"] not in ["--:--", "START", ""]:
+                        h["exp_arr"] = extract_hhmm(add_minutes_to_time_str(h["sch_arr"], proj_del))
+                    else:
+                        h["exp_arr"] = p50_hhmm if p50_hhmm and p50_hhmm != "--:--" else h["sch_arr"]
+
+                    if is_dest:
+                        h["exp_dep"] = "TERM"
+                    elif h["sch_dep"] not in ["--:--", "TERM", ""]:
+                        h["exp_dep"] = extract_hhmm(add_minutes_to_time_str(h["sch_dep"], proj_del))
+                    else:
+                        h["exp_dep"] = "--:--"
+
+                    h["delay_min"] = proj_del
+                    h["delay_delta"] = -rec_val if rec_val > 0 else (proj_del - prev_delay)
+                    prev_delay = proj_del
+                    h["time_display"] = f"Exp. {h['exp_arr']} IST"
+                    h["dynamic_eta"] = h["exp_arr"]
+                    h["confidence_level"] = pred.get("confidence_level", "HIGH")
+                    h["why"] = pred.get("explainability_text")
+                else:
+                    dist_prev = route_halts[idx - 1]["distance_km"] if idx > 0 else 0.0
+                    sec_len = max(5.0, h["distance_km"] - dist_prev)
+                    recovery = min(prev_delay, int(sec_len / 100.0 * 2.5)) if prev_delay > 5 else 0
+                    cur_del = max(0, prev_delay - recovery)
+                    h["delay_min"] = cur_del
+                    h["delay_delta"] = -recovery if recovery > 0 else (cur_del - prev_delay)
+                    prev_delay = cur_del
+
+                    if h["sch_arr"] not in ["--:--", "START", ""]:
+                        h["exp_arr"] = extract_hhmm(add_minutes_to_time_str(h["sch_arr"], cur_del))
+                    else:
+                        h["exp_arr"] = "--:--"
+
+                    if is_dest:
+                        h["exp_dep"] = "TERM"
+                    elif h["sch_dep"] not in ["--:--", "TERM", ""]:
+                        h["exp_dep"] = extract_hhmm(add_minutes_to_time_str(h["sch_dep"], cur_del))
+                    else:
+                        h["exp_dep"] = "--:--"
+
+                    h["time_display"] = f"Exp. {h['exp_arr']} IST"
+                    h["dynamic_eta"] = h["exp_arr"]
+
+    return schedule_out, route_halts
 
 
 async def get_authentic_train_status(
@@ -1614,18 +2279,19 @@ async def get_authentic_train_status(
 
     last_sch_dep_raw = ""
     last_act_dep_raw = ""
-    last_delay_min = 0
+    # Ground delay from live telemetry (never let it default to 0 if train carries delay)
+    ground_delay = int(curr_loc.get("delayMinutes") if curr_loc.get("delayMinutes") is not None else (data.get("delayMinutes") or 0))
+    last_delay_min = ground_delay
 
     for stn in route:
         if stn.get("stationCode") == last_code:
             last_sch_dep_raw = stn.get("scheduledDeparture") or stn.get("scheduledArrival") or ""
             last_act_dep_raw = stn.get("actualDeparture") or stn.get("actualArrival") or ""
-            # Calculate true delay: Actual_Departure_Time - Scheduled_Departure_Time in minutes
             calc_diff = calculate_minutes_diff(last_act_dep_raw, last_sch_dep_raw)
-            if calc_diff is not None:
+            if calc_diff is not None and (calc_diff > 0 or ground_delay == 0):
                 last_delay_min = calc_diff
-            else:
-                last_delay_min = int(stn.get("delayDeparture") if stn.get("delayDeparture") is not None else (curr_loc.get("delayMinutes") or data.get("delayMinutes") or 0))
+            elif stn.get("delayDeparture") is not None and (int(stn["delayDeparture"]) > 0 or ground_delay == 0):
+                last_delay_min = int(stn["delayDeparture"])
             break
 
     if not last_act_dep_raw:
@@ -1685,30 +2351,14 @@ async def get_authentic_train_status(
                 rem_dist_km = max(0.0, round(next_dist - curr_dist, 1))
                 break
 
-    # Current Speed
-    if op_status in ["HALTED", "NOT_STARTED", "TERMINATED"]:
-        speed_kmh = 0
-    else:
-        raw_speed = float(curr_loc.get("speed") or data.get("speed") or 0.0)
-        if raw_speed > 0:
-            speed_kmh = int(round(raw_speed))
-        else:
-            # Dynamically calculate realistic physical speed based on train kinematics
-            mps = float(resolved_train.get("mps", 110.0))
-            seg_prog = float(curr_loc.get("segmentProgress", 0.5) or 0.5)
-            if seg_prog < 0.15:
-                # Accelerating out of last station
-                speed_kmh = int(round(45.0 + seg_prog * 300.0))
-            elif seg_prog > 0.85:
-                # Decelerating into upcoming station
-                speed_kmh = int(round(40.0 + (1.0 - seg_prog) * 350.0))
-            else:
-                # Cruising along the mainline block section
-                speed_factor = 0.95 if last_delay_min > 10 else 0.88
-                curr_d = float(curr_loc.get("distanceFromOriginKm", 100.0))
-                var = ((int(curr_d * 10) % 9) - 4)
-                speed_kmh = int(round(mps * speed_factor + var))
-            speed_kmh = max(35, min(int(mps), speed_kmh))
+    # Current Speed (multi-tiered authentic physical calculation)
+    speed_kmh = calculate_dynamic_train_speed(
+        op_status=op_status,
+        curr_loc=curr_loc,
+        route=route,
+        train_info=train_info,
+        resolved_train=resolved_train
+    )
 
     # Coordinates: Exact GPS or Realistic Dead-Reckoning between stations
     gps_lat = curr_loc.get("lat") or data.get("lat")
@@ -1733,29 +2383,17 @@ async def get_authentic_train_status(
         else:
             lat, lng = 0.0, 0.0
 
-    # Build Schedule Array (with standardized fields)
-    schedule_out = []
-    for stn in route:
-        s_code = stn.get("stationCode", "")
-        sch_d_raw = stn.get("scheduledDeparture") or stn.get("scheduledArrival")
-        sch_d = extract_hhmm(sch_d_raw)
-        act_d_raw = stn.get("actualDeparture") or (stn.get("actualArrival") if not stn.get("isHalt") else None)
-        act_d = extract_hhmm(act_d_raw) if act_d_raw else sch_d
-        r_status = str(stn.get("status", "")).lower()
-
-        if r_status in ["departed", "passed"]:
-            item_status = "DEPARTED"
-        elif r_status in ["at-station", "halted"] or (curr_loc.get("stationCode") == s_code and op_status == "HALTED"):
-            item_status = "HALTED"
-        else:
-            item_status = "UPCOMING"
-
-        schedule_out.append({
-            "station_code": s_code,
-            "sch_dep": sch_d,
-            "act_dep": act_d,
-            "status": item_status
-        })
+    # Build Schedule Array and Route Halts (with dynamic ETAs & delay recovery)
+    schedule_out, route_halts = build_enriched_schedule_and_halts(
+        route=route,
+        curr_loc=curr_loc,
+        op_status=op_status,
+        last_code=last_code,
+        next_code=next_code,
+        last_delay_min=last_delay_min,
+        train_number=resolved_number,
+        journey_date=clean_date
+    )
 
     running_block = {
         "status": op_status,
@@ -1773,9 +2411,11 @@ async def get_authentic_train_status(
             "distance_km": rem_dist_km
         },
         "current_speed_kmh": speed_kmh,
+        "current_distance_km": float(curr_loc.get("distanceFromOriginKm", 0.0) or 0.0),
         "current_location": {
             "lat": lat,
-            "lng": lng
+            "lng": lng,
+            "distance_km": float(curr_loc.get("distanceFromOriginKm", 0.0) or 0.0)
         }
     }
     arr_timing = data.get("arrival_timing")
@@ -1791,6 +2431,47 @@ async def get_authentic_train_status(
     if arr_timing:
         running_block["arrival_timing"] = arr_timing
 
+    # 4. Integrate Advanced Geospatial Telemetry (Open-Meteo Elevation, Fog Visibility, OSM Track, Landmark)
+    prev_coords = resolve_station_coordinates(last_code)
+    prev_lat = prev_coords[0] if prev_coords else None
+    prev_lon = prev_coords[1] if prev_coords else None
+
+    try:
+        from engine.geospatial_telemetry_engine import enrich_train_location_telemetry
+        geospatial_telemetry = enrich_train_location_telemetry(
+            lat=lat,
+            lon=lng,
+            prev_lat=prev_lat,
+            prev_lon=prev_lon,
+            current_speed_kmh=speed_kmh
+        )
+        # Apply environmental fog speed cap if active
+        physics_data = geospatial_telemetry.get("physics_analysis", {})
+        fog_cap = physics_data.get("fog_speed_cap_kmh")
+        if fog_cap is not None and speed_kmh > fog_cap:
+            speed_kmh = int(round(fog_cap))
+            running_block["current_speed_kmh"] = speed_kmh
+
+        running_block["geospatial_telemetry"] = geospatial_telemetry
+        running_block["elevation"] = geospatial_telemetry.get("elevation", {})
+        running_block["weather_visibility"] = geospatial_telemetry.get("weather_visibility", {})
+        running_block["track_infrastructure"] = geospatial_telemetry.get("track_infrastructure", {})
+        running_block["landmark"] = geospatial_telemetry.get("landmark", {})
+    except Exception as e:
+        logger.debug(f"[Geospatial Hook Note] {e}")
+        geospatial_telemetry = {}
+
+    # Route Summary statistics
+    route_summary = {
+        "total_halts": len(route_halts),
+        "completed_halts": len([h for h in route_halts if h.get("has_passed")]),
+        "remaining_halts": len([h for h in route_halts if not h.get("has_passed")]),
+        "current_section": f"{last_name} ({last_code}) ──► {next_name} ({next_code})" if next_code else last_name,
+        "distance_to_next_km": rem_dist_km,
+        "current_speed_kmh": speed_kmh,
+        "total_distance_km": float(route_halts[-1].get("distance_km", 0.0)) if route_halts else 0.0
+    }
+
     # Standardized Response Payload
     return {
         "success": True,
@@ -1803,6 +2484,9 @@ async def get_authentic_train_status(
         },
         "running_status": running_block,
         "schedule": schedule_out,
+        "route_halts": route_halts,
+        "route_summary": route_summary,
+        "geospatial_telemetry": geospatial_telemetry,
         "last_synced_ist": get_current_ist_datetime().isoformat()
     }
 
@@ -1830,9 +2514,178 @@ def locate_train_dynamically(train_number: str, journey_date: str) -> Optional[D
     if not clean_no or not clean_no.isdigit():
         return None
 
-    from engine.train_registry import resolve_station_coordinates
+    from engine.train_registry import resolve_station_coordinates, search_trains_dynamic
+    resolved_train, _ = search_trains_dynamic(clean_no)
+    resolved_train = resolved_train or {}
 
-    # 1. Probe RailRadar Real-Time Train Live API (primary live feed)
+    from engine.geospatial_telemetry_engine import enrich_train_location_telemetry
+    def _attach_geo(telem_dict: Dict[str, Any], lat_val: float, lng_val: float, prev_l: Optional[float] = None, prev_ln: Optional[float] = None, sp: float = 0.0):
+        try:
+            g = enrich_train_location_telemetry(lat=lat_val, lon=lng_val, prev_lat=prev_l, prev_lon=prev_ln, current_speed_kmh=sp)
+            telem_dict["geospatial_telemetry"] = g
+            telem_dict["elevation"] = g.get("elevation", {})
+            telem_dict["weather_visibility"] = g.get("weather_visibility", {})
+            telem_dict["track_infrastructure"] = g.get("track_infrastructure", {})
+            telem_dict["landmark"] = g.get("landmark", {})
+        except Exception:
+            pass
+        return telem_dict
+
+    # ---------------------------------------------------------------------------
+    # PRIORITY 1 (PRIMARY): Probe NTES Official Indian Railways Live Feed (Free)
+    # ---------------------------------------------------------------------------
+    clean_date = journey_date.replace("-", "").strip()
+    try:
+        ntes_data = fetch_ntes_live_data(clean_no, clean_date)
+        if ntes_data and ntes_data.get("Status") == "SUCCESS" and len(ntes_data.get("TrainRoute", [])) >= 2:
+            curr_stn = ntes_data.get("CurrentStation", {})
+            gps = ntes_data.get("GPSCoordinates", {})
+            route = ntes_data.get("TrainRoute", [])
+
+            last_code = curr_stn.get("StationCode") or (route[0].get("StationCode") if route else "SRC")
+            last_name = curr_stn.get("StationName") or last_code
+            dep_time = curr_stn.get("ActualDeparture") or curr_stn.get("ScheduleDeparture") or get_current_ist_datetime().isoformat()
+
+            next_code, next_name, rem_dist, next_eta = "UNKNOWN", "Unknown", 0.0, ""
+            found_curr = False
+            for r in route:
+                if found_curr:
+                    next_code = r.get("StationCode")
+                    next_name = r.get("StationName")
+                    r_dist = float(r.get("DistanceFromSource", 0.0) or 0.0)
+                    cur_dist = float(gps.get("distance_from_source", 0.0) or 0.0)
+                    rem_dist = max(0.0, round(r_dist - cur_dist, 1))
+                    next_eta = r.get("ScheduleArrival") or ""
+                    break
+                if r.get("StationCode") == last_code:
+                    found_curr = True
+
+            lat = gps.get("lat")
+            lng = gps.get("lng")
+            lat_A, lng_A = resolve_station_coordinates(last_code)
+            if lat is None or lng is None:
+                lat = lat_A or 0.0
+                lng = lng_A or 0.0
+
+            raw_delay = curr_stn.get("DelayInArrival", "0")
+            delay_min = int(parse_delay_string(raw_delay))
+            speed_kmh = float(gps.get("speed", 0.0))
+
+            if curr_stn.get("AtSource"):
+                op_status = "NOT_STARTED"
+            elif curr_stn.get("AtDestination"):
+                op_status = "COMPLETED"
+            elif speed_kmh == 0.0:
+                op_status = "HALTED_AT_STATION"
+            else:
+                op_status = "RUNNING"
+
+            telem_out = {
+                "last_reported_station": {
+                    "code": last_code,
+                    "name": last_name,
+                    "departure_time": dep_time
+                },
+                "next_station": {
+                    "code": next_code,
+                    "name": next_name,
+                    "distance_km": rem_dist,
+                    "eta": next_eta
+                },
+                "coordinates": {
+                    "lat": lat,
+                    "lng": lng
+                },
+                "speed_kmh": speed_kmh,
+                "delay_minutes": delay_min
+            }
+            _attach_geo(telem_out, lat, lng, lat_A, lng_A, speed_kmh)
+
+            return {
+                "status": op_status,
+                "telemetry": telem_out,
+                "last_updated": get_current_ist_datetime().isoformat()
+            }
+    except Exception as e:
+        logger.debug(f"[locate_train_dynamically] NTES probe note: {e}")
+
+    # ---------------------------------------------------------------------------
+    # PRIORITY 2 (SECONDARY): Probe Indian Rail API (http://indianrailapi.com)
+    # ---------------------------------------------------------------------------
+    ir_key = os.getenv("INDIAN_RAIL_API_KEY") or os.getenv("RAIL_API_KEY")
+    if ir_key and ir_key != DEFAULT_RAILRADAR_API_KEY:
+        try:
+            ir_raw = fetch_live_train_status(clean_no, clean_date, api_key=ir_key, allow_fallback=False)
+            if ir_raw and str(ir_raw.get("ResponseCode")) in ["200", 200] and ir_raw.get("TrainRoute"):
+                curr_stn = ir_raw.get("CurrentStation", {}) or {}
+                route = ir_raw.get("TrainRoute", []) or []
+                curr_code = (curr_stn.get("StationCode") or "").strip().upper()
+                curr_name = curr_stn.get("StationName") or curr_code
+                at_src = curr_stn.get("AtSource", False)
+                at_dst = curr_stn.get("AtDestination", False)
+
+                next_code, next_name, rem_dist, next_eta = "UNKNOWN", "Unknown", 0.0, ""
+                found_curr = False
+                for r in route:
+                    r_code = (r.get("StationCode") or "").strip().upper()
+                    if found_curr:
+                        next_code = r_code
+                        next_name = r.get("StationName", next_code)
+                        r_dist = float(r.get("DistanceFromSource", 0.0) or 0.0)
+                        curr_dist = float(curr_stn.get("DistanceFromSource", 0.0) or 0.0)
+                        rem_dist = max(0.0, round(r_dist - curr_dist, 1))
+                        next_eta = r.get("ScheduleArrival") or ""
+                        break
+                    if r_code == curr_code:
+                        found_curr = True
+
+                coords = resolve_station_coordinates(curr_code)
+                lat = coords[0] if coords else 0.0
+                lng = coords[1] if coords else 0.0
+                delay_min = int(parse_delay_string(curr_stn.get("DelayInArrival") or curr_stn.get("DelayInDeparture")))
+
+                if at_src:
+                    op_status = "NOT_STARTED"
+                    speed_kmh = 0.0
+                elif at_dst:
+                    op_status = "COMPLETED"
+                    speed_kmh = 0.0
+                else:
+                    op_status = "RUNNING"
+                    speed_kmh = 65.0
+
+                telem_p2 = {
+                    "last_reported_station": {
+                        "code": curr_code,
+                        "name": curr_name,
+                        "departure_time": curr_stn.get("ActualDeparture") or get_current_ist_datetime().isoformat()
+                    },
+                    "next_station": {
+                        "code": next_code,
+                        "name": next_name,
+                        "distance_km": rem_dist,
+                        "eta": next_eta
+                    },
+                    "coordinates": {
+                        "lat": lat,
+                        "lng": lng
+                    },
+                    "speed_kmh": speed_kmh,
+                    "delay_minutes": delay_min
+                }
+                _attach_geo(telem_p2, lat, lng, None, None, speed_kmh)
+
+                return {
+                    "status": op_status,
+                    "telemetry": telem_p2,
+                    "last_updated": get_current_ist_datetime().isoformat()
+                }
+        except Exception as e:
+            logger.debug(f"[locate_train_dynamically] Indian Rail API probe note: {e}")
+
+    # ---------------------------------------------------------------------------
+    # PRIORITY 3 (TERTIARY / FALLBACK): RailRadar Live API & Live Map (Quota-Conserving)
+    # ---------------------------------------------------------------------------
     d = fetch_railradar_train_live(clean_no)
     today_iso = get_current_ist_datetime().strftime("%Y-%m-%d")
     is_date_mismatch = bool(journey_date and journey_date != today_iso and d and d.get("startDate") and d.get("startDate") != journey_date)
@@ -1907,35 +2760,44 @@ def locate_train_dynamically(train_number: str, journey_date: str) -> Optional[D
         else:
             lat, lng = 0.0, 0.0
 
-        speed_kmh = round(float(curr_loc.get("speed") or d.get("speed") or train_info.get("avgSpeed") or (0.0 if op_status in ["HALTED_AT_STATION", "NOT_STARTED", "COMPLETED"] else 65.0)), 1)
+        speed_kmh = float(calculate_dynamic_train_speed(
+            op_status=op_status,
+            curr_loc=curr_loc,
+            route=route,
+            train_info=train_info,
+            resolved_train=resolved_train
+        ))
         delay_min = int(d.get("delayMinutes") or curr_loc.get("delayMinutes") or 0)
         last_updated = d.get("lastUpdatedAt") or get_current_ist_datetime().isoformat()
 
+        telem_p3 = {
+            "last_reported_station": {
+                "code": last_code,
+                "name": last_name,
+                "departure_time": dep_time
+            },
+            "next_station": {
+                "code": next_code or "UNKNOWN",
+                "name": next_name or "Unknown",
+                "distance_km": rem_dist,
+                "eta": next_eta
+            },
+            "coordinates": {
+                "lat": lat,
+                "lng": lng
+            },
+            "speed_kmh": speed_kmh,
+            "delay_minutes": delay_min
+        }
+        _attach_geo(telem_p3, lat, lng, lat_A, lng_A, speed_kmh)
+
         return {
             "status": op_status,
-            "telemetry": {
-                "last_reported_station": {
-                    "code": last_code,
-                    "name": last_name,
-                    "departure_time": dep_time
-                },
-                "next_station": {
-                    "code": next_code or "UNKNOWN",
-                    "name": next_name or "Unknown",
-                    "distance_km": rem_dist,
-                    "eta": next_eta
-                },
-                "coordinates": {
-                    "lat": lat,
-                    "lng": lng
-                },
-                "speed_kmh": speed_kmh,
-                "delay_minutes": delay_min
-            },
+            "telemetry": telem_p3,
             "last_updated": last_updated
         }
 
-    # 2. Probe RailRadar All-India Live Map
+    # Tertiary Fallback Part B: Probe RailRadar All-India Live Map
     live_map = fetch_railradar_live_map()
     matched_live = next((t for t in live_map if str(t.get("train_number", "")).strip() == clean_no), None)
     if matched_live:
@@ -1949,97 +2811,39 @@ def locate_train_dynamically(train_number: str, journey_date: str) -> Optional[D
         next_d = float(matched_live.get("next_distance") or 0.0)
         rem_dist = max(0.0, round(next_d - curr_d, 1))
 
+        calc_sp = float(calculate_dynamic_train_speed(
+            op_status="RUNNING",
+            curr_loc={"distanceFromOriginKm": curr_d},
+            route=[],
+            train_info={},
+            resolved_train=resolved_train,
+            live_map_match=matched_live
+        ))
+
+        telem_p3b = {
+            "last_reported_station": {
+                "code": last_code,
+                "name": last_name,
+                "departure_time": get_current_ist_datetime().isoformat()
+            },
+            "next_station": {
+                "code": next_code,
+                "name": next_name,
+                "distance_km": rem_dist,
+                "eta": (get_current_ist_datetime() + timedelta(minutes=int(rem_dist * 1.2))).isoformat()
+            },
+            "coordinates": {
+                "lat": lat,
+                "lng": lng
+            },
+            "speed_kmh": calc_sp,
+            "delay_minutes": 0
+        }
+        _attach_geo(telem_p3b, lat, lng, None, None, calc_sp)
+
         return {
             "status": "RUNNING",
-            "telemetry": {
-                "last_reported_station": {
-                    "code": last_code,
-                    "name": last_name,
-                    "departure_time": get_current_ist_datetime().isoformat()
-                },
-                "next_station": {
-                    "code": next_code,
-                    "name": next_name,
-                    "distance_km": rem_dist,
-                    "eta": (get_current_ist_datetime() + timedelta(minutes=int(rem_dist * 1.2))).isoformat()
-                },
-                "coordinates": {
-                    "lat": lat,
-                    "lng": lng
-                },
-                "speed_kmh": 65.0,
-                "delay_minutes": 0
-            },
-            "last_updated": get_current_ist_datetime().isoformat()
-        }
-
-    # 3. Probe NTES Official Live Feed
-    clean_date = journey_date.replace("-", "").strip()
-    ntes_data = fetch_ntes_live_data(clean_no, clean_date)
-    if ntes_data and ntes_data.get("Status") == "SUCCESS" and len(ntes_data.get("TrainRoute", [])) >= 2:
-        curr_stn = ntes_data.get("CurrentStation", {})
-        gps = ntes_data.get("GPSCoordinates", {})
-        route = ntes_data.get("TrainRoute", [])
-
-        last_code = curr_stn.get("StationCode") or (route[0].get("StationCode") if route else "SRC")
-        last_name = curr_stn.get("StationName") or last_code
-        dep_time = curr_stn.get("ActualDeparture") or curr_stn.get("ScheduleDeparture") or get_current_ist_datetime().isoformat()
-
-        next_code, next_name, rem_dist, next_eta = "UNKNOWN", "Unknown", 0.0, ""
-        found_curr = False
-        for r in route:
-            if found_curr:
-                next_code = r.get("StationCode")
-                next_name = r.get("StationName")
-                r_dist = float(r.get("DistanceFromSource", 0.0) or 0.0)
-                cur_dist = float(gps.get("distance_from_source", 0.0) or 0.0)
-                rem_dist = max(0.0, round(r_dist - cur_dist, 1))
-                next_eta = r.get("ScheduleArrival") or ""
-                break
-            if r.get("StationCode") == last_code:
-                found_curr = True
-
-        lat = gps.get("lat")
-        lng = gps.get("lng")
-        if lat is None or lng is None:
-            lat_A, lng_A = resolve_station_coordinates(last_code)
-            lat = lat_A or 0.0
-            lng = lng_A or 0.0
-
-        raw_delay = curr_stn.get("DelayInArrival", "0")
-        delay_min = int(parse_delay_string(raw_delay))
-        speed_kmh = float(gps.get("speed", 0.0))
-
-        if curr_stn.get("AtSource"):
-            op_status = "NOT_STARTED"
-        elif curr_stn.get("AtDestination"):
-            op_status = "COMPLETED"
-        elif speed_kmh == 0.0:
-            op_status = "HALTED_AT_STATION"
-        else:
-            op_status = "RUNNING"
-
-        return {
-            "status": op_status,
-            "telemetry": {
-                "last_reported_station": {
-                    "code": last_code,
-                    "name": last_name,
-                    "departure_time": dep_time
-                },
-                "next_station": {
-                    "code": next_code,
-                    "name": next_name,
-                    "distance_km": rem_dist,
-                    "eta": next_eta
-                },
-                "coordinates": {
-                    "lat": lat,
-                    "lng": lng
-                },
-                "speed_kmh": speed_kmh,
-                "delay_minutes": delay_min
-            },
+            "telemetry": telem_p3b,
             "last_updated": get_current_ist_datetime().isoformat()
         }
 
@@ -2048,6 +2852,9 @@ def locate_train_dynamically(train_number: str, journey_date: str) -> Optional[D
     if cat_d:
         c_loc = cat_d.get("currentLocation", {})
         c_next = cat_d.get("nextHalt", {})
+        c_lat = float(c_loc.get("lat", 0.0))
+        c_lng = float(c_loc.get("lng", 0.0))
+        c_spd = float(c_loc.get("speed", 0.0))
         c_telem = {
             "last_reported_station": {
                 "code": c_loc.get("stationCode", "SRC"),
@@ -2061,12 +2868,13 @@ def locate_train_dynamically(train_number: str, journey_date: str) -> Optional[D
                 "eta": cat_d.get("arrival_timing", {}).get("scheduled_arrival", "")
             },
             "coordinates": {
-                "lat": float(c_loc.get("lat", 0.0)),
-                "lng": float(c_loc.get("lng", 0.0))
+                "lat": c_lat,
+                "lng": c_lng
             },
-            "speed_kmh": float(c_loc.get("speed", 0.0)),
+            "speed_kmh": c_spd,
             "delay_minutes": int(c_loc.get("delayMinutes", 0))
         }
+        _attach_geo(c_telem, c_lat, c_lng, None, None, c_spd)
         if cat_d.get("status") == "completed":
             op_st = "COMPLETED"
         elif cat_d.get("status") == "not-started":

@@ -98,7 +98,7 @@ async def test_resilient_fallback_execution():
     # Query without internet or API key uses deterministic fallback
     w_data = await weather._fetch_weather(25.3176, 82.9739)
     assert "visibility" in w_data
-    assert "METAR" in w_data["source"].upper() or w_data["source"] in ["CLIMATOLOGICAL_FALLBACK", "CACHE", "OPENWEATHER"]
+    assert "METAR" in w_data["source"].upper() or "METEO" in w_data["source"].upper() or w_data["source"].upper() in ["CLIMATOLOGICAL_FALLBACK", "CACHE", "OPENWEATHER", "OPEN-METEO", "OPEN_METEO"]
 
     penalty = weather.calculate_weather_penalty(w_data, 100.0)
     assert "total_weather_delay" in penalty

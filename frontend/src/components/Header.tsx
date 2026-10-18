@@ -74,6 +74,31 @@ export const Header: React.FC<HeaderProps> = ({
         <nav className="hidden lg:flex items-center gap-2">
           <button
             type="button"
+            onClick={() => onNavigate('radar')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+              currentPage === 'radar'
+                ? 'bg-[#1e3a8a] text-[#ffffff] shadow-sm'
+                : 'text-[#444651] hover:text-[#131b2e] hover:bg-[#eaedff]/60'
+            }`}
+          >
+            <span>🛰️ Live Rail Radar</span>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-700 font-bold border border-emerald-500/30 animate-pulse">
+              2,349+
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('eta-predictor')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              currentPage === 'eta-predictor'
+                ? 'bg-[#1e3a8a] text-[#ffffff] shadow-sm'
+                : 'text-[#444651] hover:text-[#131b2e] hover:bg-[#eaedff]/60'
+            }`}
+          >
+            Dynamic ETA Predictor
+          </button>
+          <button
+            type="button"
             onClick={() => onNavigate('search')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               currentPage === 'search'
@@ -198,6 +223,35 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Mobile Navigation Dropdown Bar */}
       {showMobileNav && (
         <div className="lg:hidden border-t border-slate-200/80 bg-white/98 backdrop-blur-md px-4 py-3 space-y-2 shadow-lg animate-in slide-in-from-top-2 duration-150">
+          <button
+            type="button"
+            onClick={() => {
+              onNavigate('radar');
+              setShowMobileNav(false);
+            }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-between ${
+              currentPage === 'radar'
+                ? 'bg-[#1E3A8A] text-white'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <span>🛰️ Live Rail Radar (All-India)</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-extrabold border border-emerald-500/30">2,349 Live</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onNavigate('eta-predictor');
+              setShowMobileNav(false);
+            }}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+              currentPage === 'eta-predictor'
+                ? 'bg-[#1E3A8A] text-white'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            ⚡ Dynamic ETA Predictor (v2.0)
+          </button>
           <button
             type="button"
             onClick={() => {

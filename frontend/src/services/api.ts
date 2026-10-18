@@ -450,4 +450,47 @@ export const api = {
     }
     return await res.json();
   },
+
+  /**
+   * Live Rail Radar Methods
+   */
+  async getLiveTrainsRadar(): Promise<any[]> {
+    const res = await fetch('/api/trains/live-all-india');
+    if (!res.ok) {
+      throw new Error(`Failed to fetch live trains: HTTP ${res.status}`);
+    }
+    return await res.json();
+  },
+
+  async getChokepoints(): Promise<any[]> {
+    const res = await fetch('/api/chokepoints');
+    if (!res.ok) {
+      throw new Error(`Failed to fetch chokepoints: HTTP ${res.status}`);
+    }
+    return await res.json();
+  },
+
+  async getStationLiveBoard(stationCode: string): Promise<any> {
+    const res = await fetch(`/api/station/${encodeURIComponent(stationCode)}/live-board`);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch station live board: HTTP ${res.status}`);
+    }
+    return await res.json();
+  },
+
+  async getTrainTrackPolyline(trainNo: string): Promise<{ train_no: string; found: boolean; polyline: [number, number][] }> {
+    const res = await fetch(`/api/train/${encodeURIComponent(trainNo)}/track`);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch train track: HTTP ${res.status}`);
+    }
+    return await res.json();
+  },
+
+  async getRadarStats(): Promise<any> {
+    const res = await fetch('/api/radar/stats');
+    if (!res.ok) {
+      throw new Error(`Failed to fetch radar stats: HTTP ${res.status}`);
+    }
+    return await res.json();
+  },
 };

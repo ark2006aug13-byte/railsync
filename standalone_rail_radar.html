@@ -1,0 +1,2062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Global Rail Radar — World Railway Track & Live Train Tracker</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  
+  <!-- Google Fonts & Tailwind CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    * {
+      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(14, 165, 233, 0.8);
+    }
+
+    /* Glassmorphism Classes */
+    .glass-panel {
+      background: rgba(10, 15, 29, 0.86);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(56, 189, 248, 0.18);
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+    }
+    .glass-panel-hover:hover {
+      border-color: rgba(56, 189, 248, 0.45);
+      box-shadow: 0 0 25px rgba(56, 189, 248, 0.25);
+    }
+
+    /* Pulse animation for train hubs */
+    @keyframes hub-pulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.7); }
+      70% { transform: scale(1.15); box-shadow: 0 0 0 14px rgba(14, 165, 233, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(14, 165, 233, 0); }
+    }
+    .hub-glow {
+      animation: hub-pulse 2.4s infinite;
+    }
+
+    /* Flashing Signal Aspects */
+    @keyframes signal-danger-flash {
+      0%, 100% { opacity: 1; filter: drop-shadow(0 0 8px #ef4444); }
+      50% { opacity: 0.35; filter: none; }
+    }
+    .signal-red-flash {
+      animation: signal-danger-flash 0.9s infinite;
+    }
+
+    /* FIDS Flip-Board Font & Row styling */
+    .fids-board-row:hover {
+      background-color: rgba(30, 41, 59, 0.8);
+    }
+
+    /* Leaflet Overrides */
+    .leaflet-container {
+      background-color: #060913 !important;
+    }
+    .leaflet-bar a {
+      background-color: rgba(15, 23, 42, 0.9) !important;
+      color: #38bdf8 !important;
+      border-color: rgba(56, 189, 248, 0.2) !important;
+    }
+    .leaflet-bar a:hover {
+      background-color: #0284c7 !important;
+      color: #ffffff !important;
+    }
+
+    /* Night overlay vignette when Night Mode is active */
+    #night-overlay {
+      pointer-events: none;
+      transition: opacity 0.8s ease-in-out;
+    }
+    .night-active {
+      opacity: 0.38;
+      background: radial-gradient(circle at center, transparent 40%, rgba(2, 6, 23, 0.85) 100%);
+    }
+  </style>
+</head>
+<body class="bg-[#060913] text-slate-100 overflow-hidden select-none h-screen w-screen relative">
+
+  <!-- FULLSCREEN INTERACTIVE MAP CONTAINER -->
+  <div id="map" class="absolute inset-0 z-0"></div>
+
+  <!-- NIGHT MODE VIGNETTE OVERLAY -->
+  <div id="night-overlay" class="absolute inset-0 z-[5] night-active transition-opacity duration-700"></div>
+
+  <!-- TOP HEADER HUD (Brand, Telemetry, Presets, Search) -->
+  <header class="absolute top-4 left-4 right-4 z-20 flex flex-wrap items-center justify-between gap-3 pointer-events-none">
+    
+    <!-- Brand / Title Pill -->
+    <div class="pointer-events-auto flex items-center gap-3.5 glass-panel px-4 py-2.5 rounded-2xl shadow-2xl">
+      <div class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-cyan-400 shadow-lg shadow-sky-500/30">
+        <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span class="absolute -top-1 -right-1 flex h-3 w-3">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+        </span>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-1.5">
+            GLOBAL RAIL RADAR
+            <span class="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/30">PRO v3.0</span>
+          </h1>
+        </div>
+        <p class="text-xs text-slate-400 font-medium">World Railway Infrastructure & Live Autonomous Fleet</p>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Counters & Flightradar-style Stats -->
+    <div class="pointer-events-auto hidden md:flex items-center gap-4 glass-panel px-5 py-2.5 rounded-2xl">
+      <div class="flex flex-col">
+        <span class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Active Trains</span>
+        <div class="flex items-center gap-1.5">
+          <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="stat-active-trains" class="mono text-sm font-bold text-emerald-400">2,319</span>
+        </div>
+      </div>
+      <div class="h-6 w-[1px] bg-slate-800"></div>
+      <div class="flex flex-col">
+        <span class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Track Network</span>
+        <span class="mono text-sm font-bold text-sky-300">OpenRailwayMap</span>
+      </div>
+      <div class="h-6 w-[1px] bg-slate-800"></div>
+      <div class="flex flex-col">
+        <span class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Signaling (ABS)</span>
+        <span id="stat-signals" class="mono text-sm font-bold text-emerald-400 flex items-center gap-1">
+          <span class="h-2 w-2 rounded-full bg-emerald-400"></span> Automatic Block
+        </span>
+      </div>
+      <div class="h-6 w-[1px] bg-slate-800"></div>
+      <div class="flex flex-col">
+        <span class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Current Zoom</span>
+        <span id="stat-zoom" class="mono text-sm font-bold text-amber-300">z5.0 (Regional)</span>
+      </div>
+    </div>
+
+    <!-- SSE Real-Time Streaming / 2-Min Live Update HUD Pill -->
+    <div class="pointer-events-auto flex items-center gap-3 glass-panel px-4 py-2 rounded-2xl shadow-2xl border border-emerald-500/30">
+      <div class="flex items-center gap-2">
+        <span class="relative flex h-2.5 w-2.5">
+          <span id="sync-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+        </span>
+        <div class="flex flex-col">
+          <div class="flex items-center gap-1.5">
+            <span id="sync-stream-badge" class="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[9px] font-extrabold border border-emerald-500/40">
+              ⚡ SSE STREAM (LIVE)
+            </span>
+            <span id="sync-flash-badge" class="hidden px-1 rounded bg-sky-500/20 text-sky-300 text-[9px] font-bold">UPDATED</span>
+          </div>
+          <span id="sync-countdown-text" class="mono text-xs font-extrabold text-emerald-400">Sync in 120s</span>
+        </div>
+      </div>
+      <button id="manual-sync-btn" onclick="triggerManualSync()" class="px-2.5 py-1 rounded-xl bg-sky-500/20 hover:bg-sky-500 text-sky-300 hover:text-white border border-sky-400/40 text-[11px] font-bold flex items-center gap-1 transition shadow" title="Refresh Live Train Telemetry Now">
+        <span id="sync-spinner">🔄</span> Refresh
+      </button>
+    </div>
+
+    <!-- Tactical Toggles: Night Mode, Bottlenecks, Speed Badges -->
+    <div class="pointer-events-auto flex items-center gap-2">
+      <!-- Night Mode & Headlights Toggle Button -->
+      <button id="toggle-night-btn" onclick="toggleNightMode()" class="flex items-center gap-1.5 glass-panel px-3.5 py-2 rounded-2xl shadow-2xl border border-indigo-500/40 hover:border-indigo-400 text-xs font-semibold text-white transition" title="Toggle Night Mode & Live Headlight Beams">
+        <span id="night-icon" class="text-amber-300">🌙</span>
+        <span id="night-label" class="mono text-[11px] font-bold text-indigo-300">Night: ON</span>
+      </button>
+
+      <!-- Bottlenecks / Chokepoints Heatmap Toggle -->
+      <button id="toggle-bottlenecks-btn" onclick="toggleBottlenecks()" class="flex items-center gap-1.5 glass-panel px-3.5 py-2 rounded-2xl shadow-2xl border border-orange-500/40 hover:border-orange-400 text-xs font-semibold text-white transition" title="Show India Railway Chokepoint & Congestion Heatmap">
+        <span class="text-orange-400">🔥</span>
+        <span id="bottlenecks-label" class="mono text-[11px] font-bold text-orange-300">Bottlenecks</span>
+      </button>
+
+      <!-- Speed Display Mode Toggle Pill -->
+      <button id="toggle-speed-labels-btn" onclick="toggleSpeedDisplayMode()" class="flex items-center gap-1.5 glass-panel px-3.5 py-2 rounded-2xl shadow-2xl border border-amber-500/30 hover:border-amber-400 text-xs font-semibold text-white transition" title="Toggle Speed Badges across all trains">
+        <span class="text-amber-400">⚡</span>
+        <span id="speed-toggle-label" class="mono text-[11px] font-bold text-amber-300">Speeds: ALL</span>
+      </button>
+    </div>
+
+    <!-- Quick Region Jump & Search Bar -->
+    <div class="pointer-events-auto flex items-center gap-2">
+      <div class="relative glass-panel rounded-2xl flex items-center px-3 py-1.5 w-64 md:w-72 shadow-2xl">
+        <svg class="w-4 h-4 text-sky-400 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input 
+          id="train-search"
+          type="text" 
+          placeholder="Search Train or Station (e.g. 12301, NDLS, VB)..." 
+          class="bg-transparent text-xs text-white placeholder-slate-400 focus:outline-none w-full font-medium"
+        />
+        <button id="search-clear-btn" class="hidden text-slate-400 hover:text-white text-xs px-1">✕</button>
+      </div>
+
+      <!-- Jump Menu Dropdown -->
+      <div class="relative">
+        <button id="jump-menu-btn" class="glass-panel hover:bg-slate-800/80 text-white font-semibold text-xs px-3.5 py-2.5 rounded-2xl flex items-center gap-2 transition shadow-xl">
+          <span>🌐 Jump</span>
+          <svg class="w-3.5 h-3.5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <div id="jump-menu-dropdown" class="hidden absolute right-0 mt-2 w-60 glass-panel rounded-2xl py-2 shadow-2xl z-30 border border-slate-700/80">
+          <div class="px-3.5 py-1 text-[10px] uppercase font-bold text-sky-400 tracking-wider">Major Indian Hubs</div>
+          <button onclick="flyToLocation(20.5937, 78.9629, 5, 'India Overview')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🇮🇳 All-India Radar</span>
+            <span class="mono text-[10px] text-slate-400">z5</span>
+          </button>
+          <button onclick="flyToLocation(28.6139, 77.2090, 11, 'Delhi NCR Hub')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🏛️ New Delhi (NDLS) Hub</span>
+            <span class="mono text-[10px] text-slate-400">z11</span>
+          </button>
+          <button onclick="flyToLocation(18.9402, 72.8356, 12, 'Mumbai CSMT')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🌊 Mumbai CSMT / Suburban</span>
+            <span class="mono text-[10px] text-slate-400">z12</span>
+          </button>
+          <button onclick="flyToLocation(22.5830, 88.3426, 12, 'Howrah Yards')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🌉 Howrah (HWH) Eastern Hub</span>
+            <span class="mono text-[10px] text-slate-400">z12</span>
+          </button>
+          <button onclick="flyToLocation(26.4547, 80.3507, 12, 'Kanpur Central')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🚂 Kanpur Central (CNB) Throat</span>
+            <span class="mono text-[10px] text-slate-400">z12</span>
+          </button>
+          <button onclick="flyToLocation(25.2818, 83.1234, 12, 'Pt Deen Dayal Upadhyaya')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🏭 DDU / Mughalsarai Yard</span>
+            <span class="mono text-[10px] text-slate-400">z12</span>
+          </button>
+          <div class="my-1 border-t border-slate-800"></div>
+          <div class="px-3.5 py-1 text-[10px] uppercase font-bold text-slate-400 tracking-wider">World High-Speed Corridors</div>
+          <button onclick="flyToLocation(35.6762, 139.6503, 11, 'Tokyo Shinkansen')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🚄 Japan Shinkansen (Tokyo)</span>
+            <span class="mono text-[10px] text-slate-400">z11</span>
+          </button>
+          <button onclick="flyToLocation(48.8566, 2.3522, 11, 'Paris TGV')" class="w-full text-left px-3.5 py-2 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between">
+            <span>🇫🇷 France TGV (Paris Hub)</span>
+            <span class="mono text-[10px] text-slate-400">z11</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- BOTTOM FLOATING CONTROLS (Layer Switcher, Filter Chips, Playback Controls) -->
+  <footer class="absolute bottom-5 left-4 right-4 z-20 flex flex-wrap items-center justify-between gap-3 pointer-events-none">
+    
+    <!-- Filter Chips with Locomotive Categories -->
+    <div class="pointer-events-auto flex items-center gap-1.5 glass-panel p-1.5 rounded-2xl shadow-xl overflow-x-auto max-w-full">
+      <button onclick="setFilter('ALL')" id="filter-btn-ALL" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-sky-500 text-white shadow-md shadow-sky-500/30 transition">
+        All Trains (<span id="count-all">2,319</span>)
+      </button>
+      <button onclick="setFilter('VB')" id="filter-btn-VB" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition">
+        ⚡ Vande Bharat
+      </button>
+      <button onclick="setFilter('RAJ')" id="filter-btn-RAJ" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition">
+        👑 Rajdhani (WAP-7)
+      </button>
+      <button onclick="setFilter('FRT')" id="filter-btn-FRT" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition">
+        📦 Freight (WAG-9)
+      </button>
+      <button onclick="setFilter('FAST')" id="filter-btn-FAST" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition">
+        🚀 High Speed (>100)
+      </button>
+      <button onclick="setFilter('WORLD')" id="filter-btn-WORLD" class="filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition">
+        🌍 International
+      </button>
+    </div>
+
+    <!-- Layer Toggles & Base Map Selector -->
+    <div class="pointer-events-auto flex items-center gap-2">
+      <!-- Tracks Layer Toggle Switch -->
+      <div class="glass-panel px-3.5 py-2 rounded-2xl flex items-center gap-2.5 shadow-xl">
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="toggle-tracks" checked class="sr-only peer">
+          <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+        </label>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-bold text-white tracking-wide">Railway Tracks</span>
+          <span class="text-[9px] text-sky-400">OpenRailwayMap Overlay</span>
+        </div>
+      </div>
+
+      <!-- Maxspeed / Track Speeds Toggle -->
+      <div class="glass-panel px-3.5 py-2 rounded-2xl flex items-center gap-2.5 shadow-xl">
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="toggle-speed-layer" class="sr-only peer">
+          <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+        </label>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-bold text-white tracking-wide">Track Speeds</span>
+          <span class="text-[9px] text-emerald-400">Section MPS Limits</span>
+        </div>
+      </div>
+
+      <!-- Base Map Selector Dropdown -->
+      <div class="relative">
+        <button id="basemap-menu-btn" class="glass-panel hover:bg-slate-800 text-white px-3.5 py-2.5 rounded-2xl flex items-center gap-2 transition shadow-xl" title="Select Map Background Style">
+          <svg class="w-4 h-4 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+          </svg>
+          <span id="current-basemap-label" class="text-xs font-semibold">🗺️ OpenStreetMap (Shows Everything)</span>
+          <svg class="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <div id="basemap-dropdown" class="hidden absolute right-0 bottom-14 w-72 glass-panel rounded-2xl py-2.5 shadow-2xl z-40 border border-slate-700/80">
+          <div class="px-3.5 py-1 text-[10px] uppercase font-bold text-sky-400 tracking-wider flex items-center justify-between">
+            <span>Map Backgrounds</span>
+            <span class="text-[9px] text-emerald-400 font-semibold">100% Free / No Key</span>
+          </div>
+          <button onclick="setBaseMap(0)" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between transition">
+            <div>
+              <div class="font-bold flex items-center gap-1.5">🗺️ OpenStreetMap (Shows Everything)</div>
+              <div class="text-[10px] text-slate-400">All tracks, stations, cities, roads, rivers & borders</div>
+            </div>
+            <span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">Best</span>
+          </button>
+          <button onclick="setBaseMap(1)" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between transition">
+            <div>
+              <div class="font-bold flex items-center gap-1.5">🛰️ Esri Satellite + City Labels</div>
+              <div class="text-[10px] text-slate-400">Real satellite photography + state & city borders</div>
+            </div>
+            <span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold">HD</span>
+          </button>
+          <button onclick="setBaseMap(2)" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between transition">
+            <div>
+              <div class="font-bold flex items-center gap-1.5">⛰️ OpenTopoMap (Terrain)</div>
+              <div class="text-[10px] text-slate-400">Mountains, valleys, elevation & railway sleepers</div>
+            </div>
+            <span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">Topo</span>
+          </button>
+          <button onclick="setBaseMap(3)" class="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-sky-500/20 hover:text-sky-300 flex items-center justify-between transition">
+            <div>
+              <div class="font-bold flex items-center gap-1.5">🌌 Dark Tactical Radar</div>
+              <div class="text-[10px] text-slate-400">Cyberpunk night mode for track & headlights glow</div>
+            </div>
+            <span class="text-[9px] text-slate-400">Dark</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Simulation Play/Pause & Speed -->
+      <div class="glass-panel px-2.5 py-1.5 rounded-2xl flex items-center gap-1 shadow-xl">
+        <button id="sim-play-pause-btn" onclick="toggleSimPlay()" class="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Pause / Resume Live Movement">
+          <svg id="play-pause-icon" class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+        <button onclick="cycleSimSpeed()" class="mono px-2 py-1 rounded-xl text-[11px] font-bold text-sky-400 hover:bg-slate-800 transition" title="Simulation Speed Multiplier">
+          <span id="speed-chip">1x</span>
+        </button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- SIDEBAR / TRAIN COCKPIT DRAWER (Slides in when train is clicked) -->
+  <aside id="train-drawer" class="fixed top-20 right-4 bottom-20 w-80 md:w-96 glass-panel rounded-3xl p-5 shadow-2xl z-30 transform translate-x-[110%] transition-transform duration-300 ease-in-out flex flex-col justify-between overflow-y-auto">
+    
+    <div>
+      <!-- Drawer Header with Close Button -->
+      <div class="flex items-start justify-between pb-4 border-b border-slate-800/80">
+        <div>
+          <div class="flex items-center gap-2">
+            <span id="drawer-type-badge" class="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-sky-500/20 text-sky-300 border border-sky-400/30">
+              Vande Bharat
+            </span>
+            <span id="drawer-train-no" class="mono text-xs font-bold text-slate-400">#22436</span>
+          </div>
+          <h2 id="drawer-train-name" class="text-lg font-bold text-white mt-1 leading-snug">
+            Vande Bharat Express
+          </h2>
+          <p id="drawer-route-text" class="text-xs text-slate-400 font-medium">NDLS ──► BSB</p>
+        </div>
+        <button onclick="closeTrainDrawer()" class="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Telemetry Dashboard Cards -->
+      <div class="grid grid-cols-2 gap-2.5 mt-4">
+        <!-- Instant Speed -->
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-3">
+          <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Instant Speed</span>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="drawer-speed" class="mono text-2xl font-extrabold text-emerald-400">114</span>
+            <span class="text-xs text-slate-400 font-bold">km/h</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+            <div id="drawer-speed-bar" class="bg-emerald-400 h-full rounded-full transition-all duration-300" style="width: 85%;"></div>
+          </div>
+        </div>
+
+        <!-- Live Delay / Punctuality -->
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-3">
+          <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Operational Delay</span>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="drawer-delay" class="mono text-2xl font-extrabold text-emerald-400">RT</span>
+            <span id="drawer-delay-unit" class="text-xs text-slate-400 font-bold">On-Time</span>
+          </div>
+          <span id="drawer-delay-badge" class="inline-block mt-2 text-[10px] font-semibold text-emerald-400">● Satellite GPS Active</span>
+        </div>
+      </div>
+
+      <!-- AUTOMATIC BLOCK SIGNALING & HEADWAY SAFETY CARD -->
+      <div class="mt-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-3.5 space-y-2">
+        <div class="flex items-center justify-between text-xs font-semibold">
+          <span class="text-slate-400 uppercase tracking-wider text-[10px]">Track Signal Aspect (ABS)</span>
+          <span id="drawer-signal-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5">
+            <span class="h-2 w-2 rounded-full bg-emerald-400"></span> LINE CLEAR (GREEN)
+          </span>
+        </div>
+        <div class="flex items-center justify-between text-xs pt-1">
+          <span class="text-slate-400 text-[11px]">Headway to Preceding Train:</span>
+          <span id="drawer-headway-dist" class="mono font-bold text-sky-300">25.0 km (Safe)</span>
+        </div>
+        <p id="drawer-signal-msg" class="text-[11px] text-slate-300 bg-slate-950/60 p-2 rounded-xl border border-slate-800/80 leading-relaxed">
+          Line Clear • Maximum Permissible Speed (MPS) permitted.
+        </p>
+      </div>
+
+      <!-- DYNAMIC TIME DELETION & TIMETABLE SLACK RECOVERY CARD -->
+      <div class="mt-3 bg-gradient-to-br from-slate-900/90 to-sky-950/40 border border-sky-500/20 rounded-2xl p-3.5 space-y-2.5">
+        <div class="flex items-center justify-between text-xs font-semibold">
+          <span class="text-sky-300 font-bold flex items-center gap-1.5">
+            <span>⚡</span> Dynamic Slack Recovery
+          </span>
+          <span id="drawer-slack-net" class="mono text-[11px] font-extrabold text-emerald-400">Net: RT (0m)</span>
+        </div>
+        <p id="drawer-slack-msg" class="text-[11px] text-slate-300 leading-relaxed">
+          Running on High-Speed Quad Track. Timetable slack maintained.
+        </p>
+        <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+          <div id="drawer-slack-bar" class="bg-gradient-to-r from-sky-400 to-emerald-400 h-full rounded-full transition-all duration-300" style="width: 100%;"></div>
+        </div>
+      </div>
+
+      <!-- Current Progress & Next Halt Timeline -->
+      <div class="mt-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-3.5 space-y-2">
+        <div class="pt-1 flex items-center justify-between text-xs">
+          <div>
+            <span class="text-[10px] text-slate-400 block">Current Sector</span>
+            <span id="drawer-last-stn" class="font-bold text-slate-200">Kanpur Central (CNB)</span>
+          </div>
+          <div class="text-right">
+            <span class="text-[10px] text-slate-400 block">Approaching Station</span>
+            <span id="drawer-next-stn" class="font-bold text-sky-300">Prayagraj Jn (PRYJ)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Geo Coordinates, Heading & Loco Class -->
+      <div class="mt-3 bg-slate-900/40 border border-slate-800/80 rounded-2xl p-3 text-xs space-y-1.5 mono">
+        <div class="flex justify-between text-slate-400">
+          <span>GPS Position:</span>
+          <span id="drawer-coords" class="text-slate-200">25.6068° N, 81.4657° E</span>
+        </div>
+        <div class="flex justify-between text-slate-400">
+          <span>Heading / Bearing:</span>
+          <span id="drawer-heading" class="text-amber-300">122° (South-East)</span>
+        </div>
+        <div class="flex justify-between text-slate-400">
+          <span>Loco Class:</span>
+          <span id="drawer-loco" class="text-sky-300 font-semibold">Trainset 18 / Vande Bharat 2.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions: Follow Camera & Trace Route -->
+    <div class="pt-4 mt-4 border-t border-slate-800 flex gap-2">
+      <button id="drawer-follow-btn" onclick="toggleFollowTrain()" class="flex-1 py-2.5 px-3 rounded-2xl bg-sky-500 hover:bg-sky-400 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/25 transition">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+        </svg>
+        <span id="follow-btn-label">Lock Camera</span>
+      </button>
+      <button onclick="drawFullRouteForSelectedTrain()" class="py-2.5 px-3 rounded-2xl glass-panel hover:bg-slate-800 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1 transition">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+        </svg>
+        <span>Show Route</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- AIRPORT-STYLE LIVE STATION INFORMATION BOARD (FIDS MODAL) -->
+  <div id="station-fids-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4">
+    <div class="glass-panel w-full max-w-5xl rounded-3xl overflow-hidden shadow-2xl border border-sky-500/30 flex flex-col max-h-[85vh]">
+      
+      <!-- FIDS Header (Airport Style Flight Board) -->
+      <div class="bg-slate-900/90 px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 rounded-xl bg-sky-500/20 text-sky-400 border border-sky-500/30">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 id="fids-station-name" class="text-xl font-extrabold text-white tracking-wide">NEW DELHI (NDLS)</h2>
+              <span id="fids-platform-count" class="mono text-xs px-2 py-0.5 rounded-full bg-slate-800 text-sky-300 font-bold border border-slate-700">16 Platforms</span>
+            </div>
+            <p class="text-xs text-slate-400">Live Station Flight-Information Display System (FIDS) • Real-Time Satellite Telemetry</p>
+          </div>
+        </div>
+
+        <!-- Clock & Close -->
+        <div class="flex items-center gap-4">
+          <div class="text-right">
+            <span class="text-[10px] text-slate-400 block font-bold uppercase tracking-wider">Indian Standard Time</span>
+            <span id="fids-live-clock" class="mono text-lg font-extrabold text-amber-300">21:45:00 IST</span>
+          </div>
+          <button onclick="closeStationFIDS()" class="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- FIDS Tabs & Platform Visualizer Strip -->
+      <div class="bg-slate-900/50 px-6 py-2.5 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <button id="fids-tab-arrivals" onclick="switchFidsTab('arrivals')" class="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-sky-500 text-white shadow transition">
+            🛬 Live Arrivals (<span id="fids-arrival-count">14</span>)
+          </button>
+          <button id="fids-tab-platforms" onclick="switchFidsTab('platforms')" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800 transition">
+            🚉 Platform Yard Layout (PF 1-16)
+          </button>
+        </div>
+        <div class="text-xs text-slate-400 flex items-center gap-2">
+          <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Live Radar Track Coverage: 120 km Radius</span>
+        </div>
+      </div>
+
+      <!-- FIDS Content Container -->
+      <div class="flex-1 overflow-y-auto p-6">
+        
+        <!-- Tab 1: Live Arrivals FIDS Table -->
+        <div id="fids-view-arrivals">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="text-[10px] uppercase font-bold text-slate-400 bg-slate-900/80 border-b border-slate-800">
+                <tr>
+                  <th class="py-2.5 px-3">Train</th>
+                  <th class="py-2.5 px-3">Type & Loco</th>
+                  <th class="py-2.5 px-3">Origin ──► Destination</th>
+                  <th class="py-2.5 px-3">Exp. Arrival</th>
+                  <th class="py-2.5 px-3">Delay Status</th>
+                  <th class="py-2.5 px-3">Platform</th>
+                  <th class="py-2.5 px-3">Live Status</th>
+                </tr>
+              </thead>
+              <tbody id="fids-arrivals-tbody" class="divide-y divide-slate-800/60 mono">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tab 2: Platform Yard Layout Schematic -->
+        <div id="fids-view-platforms" class="hidden">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="fids-platforms-grid">
+            <!-- Dynamically populated platform boxes -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- FIDS Footer -->
+      <div class="bg-slate-900/80 px-6 py-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+        <span>Display Mode: Direct High-Speed NTES & Satellite AIS Feed</span>
+        <span class="mono text-sky-400 font-bold">Auto-Refreshed via SSE Stream</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- APPLICATION JAVASCRIPT LOGIC -->
+  <script>
+    // ==========================================
+    // 1. MAP ENGINE INITIALIZATION
+    // ==========================================
+    const map = L.map('map', {
+      center: [22.5937, 79.9629],
+      zoom: 5,
+      minZoom: 3,
+      maxZoom: 18,
+      zoomControl: false
+    });
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // BASEMAP DEFINITIONS
+    const baseMapDefinitions = [
+      {
+        id: 'osm',
+        name: '🗺️ OpenStreetMap',
+        label: '🗺️ OpenStreetMap (Shows Everything)',
+        createLayer: () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors'
+        })
+      },
+      {
+        id: 'esri-hybrid',
+        name: '🛰️ Esri Satellite Hybrid',
+        label: '🛰️ Esri Satellite + Labels',
+        createLayer: () => L.layerGroup([
+          L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{x}/{y}', {
+            maxZoom: 19,
+            attribution: '&copy; Esri World Imagery'
+          }),
+          L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{x}/{y}', {
+            maxZoom: 19
+          })
+        ])
+      },
+      {
+        id: 'opentopo',
+        name: '⛰️ OpenTopoMap',
+        label: '⛰️ OpenTopoMap (Terrain)',
+        createLayer: () => L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+          maxZoom: 17,
+          attribution: '&copy; OpenTopoMap contributors'
+        })
+      },
+      {
+        id: 'dark',
+        name: '🌌 Dark Tactical',
+        label: '🌌 Dark Tactical Radar',
+        createLayer: () => L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{x}/{y}', {
+          maxZoom: 19,
+          attribution: '&copy; Esri &copy; OpenRailwayMap'
+        })
+      }
+    ];
+
+    let currentBaseMapIndex = 0;
+    let currentBaseLayer = baseMapDefinitions[0].createLayer().addTo(map);
+
+    function setBaseMap(index) {
+      if (index < 0 || index >= baseMapDefinitions.length) return;
+      currentBaseMapIndex = index;
+      map.removeLayer(currentBaseLayer);
+      currentBaseLayer = baseMapDefinitions[index].createLayer().addTo(map);
+
+      const labelEl = document.getElementById('current-basemap-label');
+      if (labelEl) labelEl.textContent = baseMapDefinitions[index].label;
+      const dropEl = document.getElementById('basemap-dropdown');
+      if (dropEl) dropEl.classList.add('hidden');
+
+      if (railwayTracksLayer && map.hasLayer(railwayTracksLayer)) railwayTracksLayer.bringToFront();
+      if (speedLimitsLayer && map.hasLayer(speedLimitsLayer)) speedLimitsLayer.bringToFront();
+    }
+
+    const basemapBtn = document.getElementById('basemap-menu-btn');
+    const basemapDropdown = document.getElementById('basemap-dropdown');
+    if (basemapBtn && basemapDropdown) {
+      basemapBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        basemapDropdown.classList.toggle('hidden');
+      });
+      document.addEventListener('click', () => basemapDropdown.classList.add('hidden'));
+    }
+
+    // ==========================================
+    // 2. OPENRAILWAYMAP INFRASTRUCTURE OVERLAYS
+    // ==========================================
+    const railwayTracksLayer = L.tileLayer('https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: 'Style: OpenRailwayMap',
+      opacity: 0.85
+    }).addTo(map);
+
+    const speedLimitsLayer = L.tileLayer('https://{s}.tiles.openrailwaymap.org/maxspeed/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      opacity: 0.80
+    });
+
+    document.getElementById('toggle-tracks').addEventListener('change', (e) => {
+      if (e.target.checked) {
+        if (!map.hasLayer(railwayTracksLayer)) map.addLayer(railwayTracksLayer);
+      } else {
+        if (map.hasLayer(railwayTracksLayer)) map.removeLayer(railwayTracksLayer);
+      }
+    });
+
+    document.getElementById('toggle-speed-layer').addEventListener('change', (e) => {
+      if (e.target.checked) {
+        if (!map.hasLayer(speedLimitsLayer)) map.addLayer(speedLimitsLayer);
+      } else {
+        if (map.hasLayer(speedLimitsLayer)) map.removeLayer(speedLimitsLayer);
+      }
+    });
+
+    // ==========================================
+    // 3. MAJOR RAILWAY HUBS (CLICKABLE FOR FIDS)
+    // ==========================================
+    const majorHubs = [
+      { code: 'NDLS', name: 'New Delhi Junction', lat: 28.6424, lng: 77.2195, trains: 320, color: '#38bdf8' },
+      { code: 'HWH', name: 'Howrah Junction', lat: 22.5830, lng: 88.3426, trains: 280, color: '#38bdf8' },
+      { code: 'CSMT', name: 'Mumbai CSMT', lat: 18.9402, lng: 72.8356, trains: 260, color: '#38bdf8' },
+      { code: 'CNB', name: 'Kanpur Central', lat: 26.4547, lng: 80.3507, trains: 240, color: '#f59e0b' },
+      { code: 'DDU', name: 'Pt Deen Dayal Upadhyaya Jn', lat: 25.2818, lng: 83.1234, trains: 210, color: '#f59e0b' },
+      { code: 'PNBE', name: 'Patna Junction', lat: 25.6022, lng: 85.1376, trains: 190, color: '#38bdf8' },
+      { code: 'MAS', name: 'Chennai Central', lat: 13.0827, lng: 80.2707, trains: 195, color: '#38bdf8' },
+      { code: 'SBC', name: 'KSR Bengaluru', lat: 12.9784, lng: 77.5684, trains: 180, color: '#38bdf8' },
+      { code: 'BZA', name: 'Vijayawada Junction', lat: 16.5186, lng: 80.6200, trains: 175, color: '#f59e0b' },
+      { code: 'NGP', name: 'Nagpur Junction', lat: 21.1528, lng: 79.0882, trains: 160, color: '#38bdf8' },
+      { code: 'ADI', name: 'Ahmedabad Junction', lat: 23.0225, lng: 72.5714, trains: 170, color: '#38bdf8' }
+    ];
+
+    const hubsLayerGroup = L.layerGroup().addTo(map);
+
+    function renderHubMarkers() {
+      hubsLayerGroup.clearLayers();
+      const currentZoom = map.getZoom();
+
+      majorHubs.forEach(hub => {
+        const iconHtml = `
+          <div class="relative flex items-center justify-center cursor-pointer group" onclick="openStationFIDS('${hub.code}')">
+            <div class="w-3.5 h-3.5 rounded-full bg-sky-400 hub-glow" style="background-color: ${hub.color}"></div>
+            ${currentZoom >= 7 ? `<span class="absolute left-4 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-slate-900/95 text-sky-300 border border-slate-700 shadow-md group-hover:bg-sky-500 group-hover:text-white transition">${hub.code}</span>` : ''}
+          </div>
+        `;
+
+        const customHubIcon = L.divIcon({
+          className: 'hub-pin-container',
+          html: iconHtml,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
+        });
+
+        const marker = L.marker([hub.lat, hub.lng], { icon: customHubIcon });
+        marker.bindTooltip(`<b>${hub.name} (${hub.code})</b><br>${hub.trains} Active Trains • <i>Click for Live FIDS Board</i>`, { direction: 'top' });
+        marker.on('click', () => openStationFIDS(hub.code));
+        hubsLayerGroup.addLayer(marker);
+      });
+    }
+
+    // ==========================================
+    // 4. FLIGHTRADAR24-STYLE CANVAS RADAR ENGINE
+    // ==========================================
+    let liveTrainFleet = [];
+    let activeFilter = 'ALL';
+    let selectedTrainId = null;
+    let hoveredTrain = null;
+    let isFollowingTrain = false;
+    let isSimPlaying = true;
+    let simSpeedMultiplier = 1;
+    let activeRoutePolyline = null;
+    let mousePos = { x: -100, y: -100 };
+    let speedDisplayMode = 'ALL';
+    let isNightMode = true; // Auto-active for night
+    let showBottlenecks = false;
+    let liveChokepoints = [];
+    let nextSyncEpoch = Date.now() + 120000;
+    let isSyncing = false;
+
+    // Toggle Night Mode
+    function toggleNightMode() {
+      isNightMode = !isNightMode;
+      const overlay = document.getElementById('night-overlay');
+      const label = document.getElementById('night-label');
+      const icon = document.getElementById('night-icon');
+      if (isNightMode) {
+        overlay.classList.add('night-active');
+        label.textContent = 'Night: ON';
+        icon.textContent = '🌙';
+      } else {
+        overlay.classList.remove('night-active');
+        label.textContent = 'Day: ON';
+        icon.textContent = '☀️';
+      }
+      drawCanvasRadar();
+    }
+
+    // Toggle Bottlenecks Heatmap
+    function toggleBottlenecks() {
+      showBottlenecks = !showBottlenecks;
+      const label = document.getElementById('bottlenecks-label');
+      const btn = document.getElementById('toggle-bottlenecks-btn');
+      if (showBottlenecks) {
+        label.textContent = 'Bottlenecks (ON)';
+        btn.className = 'flex items-center gap-1.5 glass-panel px-3.5 py-2 rounded-2xl shadow-2xl border border-orange-400 bg-orange-500/20 text-xs font-semibold text-white transition';
+        if (liveChokepoints.length === 0) fetchLiveChokepoints();
+      } else {
+        label.textContent = 'Bottlenecks';
+        btn.className = 'flex items-center gap-1.5 glass-panel px-3.5 py-2 rounded-2xl shadow-2xl border border-orange-500/40 hover:border-orange-400 text-xs font-semibold text-white transition';
+      }
+      drawCanvasRadar();
+    }
+
+    async function fetchLiveChokepoints() {
+      try {
+        const resp = await fetch('/api/chokepoints');
+        if (resp.ok) {
+          liveChokepoints = await resp.json();
+          drawCanvasRadar();
+        }
+      } catch (e) {
+        console.warn('Chokepoints fetch error:', e);
+      }
+    }
+
+    function toggleSpeedDisplayMode() {
+      if (speedDisplayMode === 'ALL') {
+        speedDisplayMode = 'AUTO';
+      } else if (speedDisplayMode === 'AUTO') {
+        speedDisplayMode = 'OFF';
+      } else {
+        speedDisplayMode = 'ALL';
+      }
+      const label = document.getElementById('speed-toggle-label');
+      if (label) label.textContent = `Speeds: ${speedDisplayMode}`;
+      drawCanvasRadar();
+    }
+
+    // Canvas overlay setup
+    const canvasOverlay = document.createElement('canvas');
+    canvasOverlay.id = 'train-radar-canvas';
+    canvasOverlay.style.position = 'absolute';
+    canvasOverlay.style.left = '0';
+    canvasOverlay.style.top = '0';
+    canvasOverlay.style.pointerEvents = 'auto';
+    canvasOverlay.style.zIndex = '400';
+    map.getPanes().overlayPane.appendChild(canvasOverlay);
+    const ctx = canvasOverlay.getContext('2d');
+
+    const radarTooltip = document.createElement('div');
+    radarTooltip.id = 'radar-hover-tooltip';
+    radarTooltip.className = 'hidden pointer-events-none fixed z-50 glass-panel px-3.5 py-2.5 rounded-2xl text-xs text-white shadow-2xl border border-sky-400/40';
+    document.body.appendChild(radarTooltip);
+
+    function resizeCanvas() {
+      const size = map.getSize();
+      const dpr = window.devicePixelRatio || 1;
+      canvasOverlay.width = size.x * dpr;
+      canvasOverlay.height = size.y * dpr;
+      canvasOverlay.style.width = size.x + 'px';
+      canvasOverlay.style.height = size.y + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resizeCanvas();
+    map.on('resize', resizeCanvas);
+
+    function getTrainColor(cat) {
+      switch (cat) {
+        case 'VB': return '#00f5d4';    // Cyan (Vande Bharat)
+        case 'RAJ': return '#f59e0b';   // Amber Gold (Rajdhani)
+        case 'SHT': return '#38bdf8';   // Sky Blue (Shatabdi/Tejas)
+        case 'FRT': return '#f97316';   // Safety Orange (Freight WAG-9)
+        case 'EMU': return '#c084fc';   // Commuter Purple (Suburban)
+        case 'SF': return '#10b981';    // Emerald Green (Superfast)
+        default: return '#60a5fa';      // Blue (Express/Mail)
+      }
+    }
+
+    // ==========================================
+    // 5. VECTOR LOCOMOTIVE HEADS & LIVERIES
+    // ==========================================
+    function drawLocomotiveShape(ctx, train, zoom, color, isSelected, isHovered) {
+      const cat = train.cat || 'EXP';
+      const isHalted = train.spd === 0;
+
+      if (zoom >= 8) {
+        if (cat === 'VB') {
+          // Vande Bharat Aerodynamic Bullet Nose
+          ctx.beginPath();
+          ctx.moveTo(0, -14);
+          ctx.lineTo(5, -6);
+          ctx.lineTo(5, 11);
+          ctx.lineTo(-5, 11);
+          ctx.lineTo(-5, -6);
+          ctx.closePath();
+          ctx.fillStyle = '#f8fafc'; // White body
+          ctx.fill();
+          ctx.strokeStyle = '#0284c7';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+
+          // Aerodynamic dark wrap-around window
+          ctx.beginPath();
+          ctx.moveTo(-3.5, -9);
+          ctx.lineTo(0, -12);
+          ctx.lineTo(3.5, -9);
+          ctx.lineTo(3.5, -6);
+          ctx.lineTo(-3.5, -6);
+          ctx.closePath();
+          ctx.fillStyle = '#0f172a';
+          ctx.fill();
+
+          // Cyan / Navy racing stripes
+          ctx.fillStyle = '#00f5d4';
+          ctx.fillRect(-4.5, -2, 2, 12);
+          ctx.fillRect(2.5, -2, 2, 12);
+
+          // Dual high-intensity forward LED headlights
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(-2, -12, 1, 0, Math.PI * 2);
+          ctx.arc(2, -12, 1, 0, Math.PI * 2);
+          ctx.fill();
+
+        } else if (cat === 'RAJ' || cat === 'SHT') {
+          // WAP-7 High-Speed Electric Locomotive (Red & Cream)
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(-5, -11, 10, 22, 2) : ctx.rect(-5, -11, 10, 22);
+          ctx.fillStyle = (cat === 'RAJ') ? '#dc2626' : '#0284c7';
+          ctx.fill();
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+
+          // Cream center band
+          ctx.fillStyle = '#fef08a';
+          ctx.fillRect(-5, -2, 10, 4);
+
+          // Cab windows
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(-3.5, -9.5, 7, 3);
+          ctx.fillRect(-3.5, 7, 7, 2.5);
+
+          // Roof Pantograph
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-3, -2);
+          ctx.lineTo(3, 2);
+          ctx.moveTo(3, -2);
+          ctx.lineTo(-3, 2);
+          ctx.stroke();
+
+          // Twin round halogen headlights
+          ctx.fillStyle = '#fef08a';
+          ctx.beginPath();
+          ctx.arc(-2.5, -10.5, 1, 0, Math.PI * 2);
+          ctx.arc(2.5, -10.5, 1, 0, Math.PI * 2);
+          ctx.fill();
+
+        } else if (cat === 'FRT') {
+          // WAG-9 Heavy Freight Locomotive (Blue-Orange Heavy Hood)
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(-6, -12, 12, 24, 2) : ctx.rect(-6, -12, 12, 24);
+          ctx.fillStyle = '#1d4ed8'; // Industrial Blue
+          ctx.fill();
+          ctx.strokeStyle = '#f97316'; // Safety Orange
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Front Safety Orange Chevron
+          ctx.fillStyle = '#ea580c';
+          ctx.beginPath();
+          ctx.moveTo(-5, -11);
+          ctx.lineTo(0, -6);
+          ctx.lineTo(5, -11);
+          ctx.lineTo(5, -8);
+          ctx.lineTo(0, -3);
+          ctx.lineTo(-5, -8);
+          ctx.closePath();
+          ctx.fill();
+
+          // Roof cooling vents
+          ctx.fillStyle = '#334155';
+          ctx.fillRect(-4, 0, 8, 8);
+
+          // High-power nose lamp
+          ctx.fillStyle = '#fed7aa';
+          ctx.beginPath();
+          ctx.arc(0, -11, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+
+        } else if (cat === 'EMU') {
+          // Suburban Commuter EMU Cab (Purple-White)
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(-5, -10, 10, 20, 3) : ctx.rect(-5, -10, 10, 20);
+          ctx.fillStyle = '#7e22ce';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(-4, -9, 8, 5);
+
+          // 3 Commuter windshields
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(-3.5, -8, 2, 2.5);
+          ctx.fillRect(-0.8, -8, 1.6, 2.5);
+          ctx.fillRect(1.5, -8, 2, 2.5);
+
+        } else {
+          // Classic IR Maroon / Superfast WAP-4
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(-4.5, -10, 9, 21, 2) : ctx.rect(-4.5, -10, 9, 21);
+          ctx.fillStyle = '#991b1b';
+          ctx.fill();
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(-3, -8.5, 6, 3);
+          ctx.fillStyle = '#fef08a';
+          ctx.beginPath();
+          ctx.arc(-2, -9.5, 0.9, 0, Math.PI*2);
+          ctx.arc(2, -9.5, 0.9, 0, Math.PI*2);
+          ctx.fill();
+        }
+      } else {
+        // Zoom <= 7: Aerodynamic chevron
+        ctx.beginPath();
+        if (zoom <= 5) {
+          ctx.moveTo(0, -6);
+          ctx.lineTo(4, 5);
+          ctx.lineTo(0, 3);
+          ctx.lineTo(-4, 5);
+        } else {
+          ctx.moveTo(0, -9);
+          ctx.lineTo(6, 7);
+          ctx.lineTo(0, 4);
+          ctx.lineTo(-6, 7);
+        }
+        ctx.closePath();
+        ctx.fillStyle = isHalted ? '#f59e0b' : color;
+        ctx.fill();
+        ctx.strokeStyle = '#060913';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        if (train.spd > 0) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(-1.5, -7, 1, 1);
+          ctx.fillRect(0.5, -7, 1, 1);
+        }
+      }
+    }
+
+    // ==========================================
+    // 6. NIGHT MODE & LIVE HEADLIGHT BEAMS
+    // ==========================================
+    function drawHeadlightBeam(ctx, train, zoom) {
+      if (!isNightMode || train.spd === 0) return;
+
+      const beamLength = zoom >= 10 ? 70 : (zoom >= 7 ? 48 : 32);
+      const spreadHalfAngle = 0.28; // ~16 deg
+      const noseY = zoom >= 8 ? -11 : -7;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, noseY);
+      const leftX = -Math.sin(spreadHalfAngle) * beamLength;
+      const leftY = noseY - Math.cos(spreadHalfAngle) * beamLength;
+      const rightX = Math.sin(spreadHalfAngle) * beamLength;
+      const rightY = noseY - Math.cos(spreadHalfAngle) * beamLength;
+      ctx.lineTo(leftX, leftY);
+      ctx.arc(0, noseY, beamLength, -Math.PI/2 - spreadHalfAngle, -Math.PI/2 + spreadHalfAngle);
+      ctx.lineTo(rightX, rightY);
+      ctx.closePath();
+
+      // Radiant conical beam gradient
+      const grad = ctx.createRadialGradient(0, noseY, 2, 0, noseY, beamLength);
+      grad.addColorStop(0, 'rgba(255, 255, 240, 0.85)');
+      grad.addColorStop(0.2, 'rgba(254, 240, 138, 0.45)');
+      grad.addColorStop(0.65, 'rgba(253, 224, 71, 0.16)');
+      grad.addColorStop(1, 'rgba(250, 204, 21, 0)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Ambient cab illumination
+      ctx.beginPath();
+      ctx.arc(0, 0, zoom >= 8 ? 16 : 10, 0, Math.PI * 2);
+      const cabGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, zoom >= 8 ? 16 : 10);
+      cabGrad.addColorStop(0, 'rgba(254, 240, 138, 0.25)');
+      cabGrad.addColorStop(1, 'rgba(254, 240, 138, 0)');
+      ctx.fillStyle = cabGrad;
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // ==========================================
+    // 7. AUTOMATIC BLOCK SIGNALING ASPECTS
+    // ==========================================
+    function drawSignalAspectLight(ctx, train, zoom) {
+      if (zoom < 7) return;
+      const sig = train.signal || 'GREEN';
+      const signalDistY = zoom >= 10 ? -28 : -20;
+
+      ctx.save();
+      let sigColor = '#10b981';
+      let sigGlow = 'rgba(16, 185, 129, 0.5)';
+      if (sig === 'RED') {
+        sigColor = '#ef4444';
+        sigGlow = 'rgba(239, 68, 68, 0.7)';
+      } else if (sig === 'YELLOW') {
+        sigColor = '#eab308';
+        sigGlow = 'rgba(234, 179, 8, 0.6)';
+      } else if (sig === 'DOUBLE_YELLOW') {
+        sigColor = '#f59e0b';
+        sigGlow = 'rgba(245, 158, 11, 0.6)';
+      }
+
+      // Signal post
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(9, signalDistY);
+      ctx.lineTo(9, signalDistY + 8);
+      ctx.stroke();
+
+      // Aspect glow
+      ctx.beginPath();
+      ctx.arc(9, signalDistY, 5, 0, Math.PI * 2);
+      ctx.fillStyle = sigGlow;
+      ctx.fill();
+
+      // Lens
+      ctx.beginPath();
+      ctx.arc(9, signalDistY, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = sigColor;
+      ctx.fill();
+
+      if (sig === 'DOUBLE_YELLOW') {
+        ctx.beginPath();
+        ctx.arc(9, signalDistY - 4, 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = sigColor;
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    // ==========================================
+    // 8. CHOKEPOINTS / BOTTLENECKS HEATMAP
+    // ==========================================
+    function drawBottleneckHeatmap(ctx) {
+      if (!showBottlenecks || liveChokepoints.length === 0) return;
+
+      const now = performance.now() * 0.002;
+      const pulseFactor = 0.85 + 0.15 * Math.sin(now);
+
+      liveChokepoints.forEach(cp => {
+        const pt = map.latLngToContainerPoint([cp.lat, cp.lng]);
+        const radius = Math.min(85, Math.max(32, cp.score * 4)) * pulseFactor;
+
+        ctx.save();
+        const grad = ctx.createRadialGradient(pt.x, pt.y, 2, pt.x, pt.y, radius);
+        if (cp.status === 'CRITICAL CHOKEPOINT') {
+          grad.addColorStop(0, 'rgba(239, 68, 68, 0.7)');
+          grad.addColorStop(0.4, 'rgba(220, 38, 38, 0.35)');
+          grad.addColorStop(1, 'rgba(239, 68, 68, 0)');
+        } else if (cp.status === 'HEAVY CONGESTION') {
+          grad.addColorStop(0, 'rgba(249, 115, 22, 0.65)');
+          grad.addColorStop(0.4, 'rgba(234, 88, 12, 0.3)');
+          grad.addColorStop(1, 'rgba(249, 115, 22, 0)');
+        } else {
+          grad.addColorStop(0, 'rgba(234, 179, 8, 0.5)');
+          grad.addColorStop(0.5, 'rgba(202, 138, 4, 0.2)');
+          grad.addColorStop(1, 'rgba(234, 179, 8, 0)');
+        }
+
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        if (map.getZoom() >= 6) {
+          const label = `${cp.code}: ${cp.active_trains_count} TRAINS (${cp.slow_halted_count} SLOW)`;
+          ctx.font = 'bold 10px JetBrains Mono, monospace';
+          const textW = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          ctx.strokeStyle = cp.color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(pt.x - textW/2 - 6, pt.y - 18, textW + 12, 17, 4) : ctx.rect(pt.x - textW/2 - 6, pt.y - 18, textW + 12, 17);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, pt.x - textW/2, pt.y - 10);
+        }
+
+        ctx.restore();
+      });
+    }
+
+    // ==========================================
+    // 9. HIGH-PERFORMANCE CANVAS DRAWING LOOP (60 FPS)
+    // ==========================================
+    function drawCanvasRadar() {
+      const size = map.getSize();
+      const bounds = map.getBounds();
+      const zoom = map.getZoom();
+
+      const topLeft = map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(canvasOverlay, topLeft);
+      ctx.clearRect(0, 0, size.x, size.y);
+
+      // Draw Bottlenecks Heatmap Layer first
+      drawBottleneckHeatmap(ctx);
+
+      let visibleCount = 0;
+      let newHoveredTrain = null;
+
+      for (let i = 0; i < liveTrainFleet.length; i++) {
+        const train = liveTrainFleet[i];
+
+        // Filters
+        if (activeFilter === 'VB' && train.cat !== 'VB') continue;
+        if (activeFilter === 'RAJ' && train.cat !== 'RAJ') continue;
+        if (activeFilter === 'FRT' && train.cat !== 'FRT') continue;
+        if (activeFilter === 'FAST' && train.spd < 100) continue;
+        if (activeFilter === 'WORLD' && train.cat !== 'WORLD') continue;
+
+        // Frustum Culling
+        if (train.lat < bounds.getSouth() - 0.2 || train.lat > bounds.getNorth() + 0.2 ||
+            train.lng < bounds.getWest() - 0.2 || train.lng > bounds.getEast() + 0.2) {
+          continue;
+        }
+
+        visibleCount++;
+        const pt = map.latLngToContainerPoint([train.lat, train.lng]);
+        const isSelected = train.id === selectedTrainId;
+        const color = getTrainColor(train.cat);
+        const headingRad = (train.brg || 0) * (Math.PI / 180);
+
+        const shouldShowBadge = (speedDisplayMode === 'ALL') || 
+                                 (speedDisplayMode === 'AUTO' && zoom >= 7) || 
+                                 isSelected;
+
+        // Hover test
+        const dx = mousePos.x - pt.x;
+        const dy = mousePos.y - pt.y;
+        const distToMouse = Math.hypot(dx, dy);
+        const isHovered = (distToMouse < 18) || (shouldShowBadge && dx >= 8 && dx <= 180 && dy >= -18 && dy <= 22);
+        if (isHovered && !newHoveredTrain) {
+          newHoveredTrain = train;
+        }
+
+        ctx.save();
+        ctx.translate(pt.x, pt.y);
+
+        // Draw selected pulse ring
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.arc(0, 0, 18, 0, Math.PI * 2);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
+
+        // Hover glow
+        if (isHovered) {
+          ctx.beginPath();
+          ctx.arc(0, 0, 14, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
+          ctx.fill();
+        }
+
+        // Orient to track bearing
+        ctx.save();
+        ctx.rotate(headingRad);
+
+        // 1. Live Headlight Beams (Night Mode)
+        drawHeadlightBeam(ctx, train, zoom);
+
+        // 2. Vector Locomotive Head
+        drawLocomotiveShape(ctx, train, zoom, color, isSelected, isHovered);
+
+        // 3. Automatic Block Signal Aspect Light
+        drawSignalAspectLight(ctx, train, zoom);
+
+        ctx.restore();
+
+        // 4. Speed & Telemetry Badges
+        if (shouldShowBadge || isHovered) {
+          const isDeepZoom = zoom >= 10;
+          const isMidZoom = zoom >= 7;
+
+          let spdColor = color;
+          let spdText = `${train.spd} km/h`;
+          if (train.spd === 0) {
+            spdColor = '#f59e0b';
+            spdText = 'HALT';
+          } else if (train.spd >= 100) {
+            spdColor = '#00f5d4';
+          }
+
+          ctx.textBaseline = 'middle';
+
+          if (!isDeepZoom) {
+            ctx.font = isMidZoom ? '600 10px JetBrains Mono, monospace' : '700 9px JetBrains Mono, monospace';
+            const pillText = `${train.no} • ${spdText}`;
+            const textWidth = ctx.measureText(pillText).width;
+            const badgeX = 10;
+            const badgeY = -1;
+            const badgeW = textWidth + 10;
+            const badgeH = isMidZoom ? 18 : 15;
+
+            ctx.fillStyle = isSelected ? 'rgba(2, 132, 199, 0.96)' : (isHovered ? 'rgba(15, 23, 42, 0.96)' : 'rgba(10, 15, 29, 0.90)');
+            ctx.strokeStyle = isSelected ? '#38bdf8' : (isHovered ? '#38bdf8' : (train.spd === 0 ? '#f59e0b' : color + 'bb'));
+            ctx.lineWidth = isSelected ? 1.5 : 1;
+
+            ctx.beginPath();
+            ctx.roundRect ? ctx.roundRect(badgeX, badgeY - badgeH/2, badgeW, badgeH, 4) : ctx.rect(badgeX, badgeY - badgeH/2, badgeW, badgeH);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(`${train.no} • `, badgeX + 5, badgeY);
+            const noWidth = ctx.measureText(`${train.no} • `).width;
+            ctx.fillStyle = spdColor;
+            ctx.fillText(spdText, badgeX + 5 + noWidth, badgeY);
+          } else {
+            const line1 = `${train.no} ${train.name}`;
+            const line2 = train.spd === 0 
+              ? `● HALT @ ${train.stn || 'Platform'} • 0 km/h` 
+              : `⚡ ${train.spd} km/h • ${train.brg || 0}° ──► ${train.nstn || 'Next'}`;
+
+            ctx.font = 'bold 11px Plus Jakarta Sans, sans-serif';
+            const w1 = ctx.measureText(line1).width;
+            ctx.font = '600 9px JetBrains Mono, monospace';
+            const w2 = ctx.measureText(line2).width;
+
+            const badgeW = Math.max(w1, w2) + 14;
+            const badgeH = 28;
+            const badgeX = 12;
+            const badgeY = -5;
+
+            ctx.fillStyle = isSelected ? 'rgba(2, 132, 199, 0.96)' : (isHovered ? 'rgba(15, 23, 42, 0.96)' : 'rgba(10, 15, 29, 0.92)');
+            ctx.strokeStyle = isSelected ? '#38bdf8' : (train.spd === 0 ? '#f59e0b' : color + 'cc');
+            ctx.lineWidth = isSelected ? 1.5 : 1;
+
+            ctx.beginPath();
+            ctx.roundRect ? ctx.roundRect(badgeX, badgeY - 7, badgeW, badgeH, 5) : ctx.rect(badgeX, badgeY - 7, badgeW, badgeH);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.font = 'bold 11px Plus Jakarta Sans, sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(line1, badgeX + 7, badgeY);
+
+            ctx.font = '600 9px JetBrains Mono, monospace';
+            ctx.fillStyle = spdColor;
+            ctx.fillText(line2, badgeX + 7, badgeY + 13);
+          }
+        }
+
+        ctx.restore();
+      }
+
+      hoveredTrain = newHoveredTrain;
+      canvasOverlay.style.cursor = hoveredTrain ? 'pointer' : 'grab';
+
+      // Tooltip
+      if (hoveredTrain) {
+        radarTooltip.classList.remove('hidden');
+        radarTooltip.style.left = (mousePos.x + 18) + 'px';
+        radarTooltip.style.top = (mousePos.y - 20) + 'px';
+        radarTooltip.innerHTML = `
+          <div class="flex items-center justify-between gap-3 font-bold text-sky-300 pb-1.5 border-b border-slate-700/60">
+            <div class="flex items-center gap-1.5">
+              <span>🚆</span>
+              <span class="mono text-amber-300 font-extrabold text-sm">${hoveredTrain.no}</span>
+              <span class="text-white text-xs">${hoveredTrain.name}</span>
+            </div>
+            <span class="text-[10px] px-2 py-0.5 rounded-full ${hoveredTrain.spd === 0 ? 'bg-amber-500/20 text-amber-300 border border-amber-400/40' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'} font-bold whitespace-nowrap">
+              ${hoveredTrain.spd === 0 ? '● PLATFORM HALT' : '🟢 IN MOTION'}
+            </span>
+          </div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-300 mt-2">
+            <div><span class="text-slate-400">Locomotive:</span> <span class="text-sky-300 font-semibold">${hoveredTrain.loco ? hoveredTrain.loco.split('(')[0] : 'WAP-7'}</span></div>
+            <div><span class="text-slate-400">Current Speed:</span> <span class="mono font-bold ${hoveredTrain.spd >= 100 ? 'text-cyan-300' : (hoveredTrain.spd === 0 ? 'text-amber-400' : 'text-emerald-400')}">${hoveredTrain.spd} km/h</span></div>
+            <div class="col-span-2 text-slate-300">
+              <span class="text-slate-400">Sector:</span> 
+              <span class="font-medium text-white">${hoveredTrain.stn || 'Origin'}</span> ──► <span class="font-semibold text-sky-300">${hoveredTrain.nstn || 'Next Station'}</span>
+            </div>
+            <div class="col-span-2 text-slate-300 flex items-center justify-between pt-1 border-t border-slate-800">
+              <span class="text-slate-400">Block Signal:</span>
+              <span class="font-bold ${hoveredTrain.signal === 'RED' ? 'text-red-400' : (hoveredTrain.signal === 'YELLOW' ? 'text-amber-300' : 'text-emerald-400')}">
+                ● ${hoveredTrain.signal || 'GREEN'} (${hoveredTrain.headway_km || 25} km)
+              </span>
+            </div>
+          </div>
+        `;
+      } else {
+        radarTooltip.classList.add('hidden');
+      }
+
+      if (isFollowingTrain && selectedTrainId) {
+        const sel = liveTrainFleet.find(t => t.id === selectedTrainId);
+        if (sel) map.panTo([sel.lat, sel.lng], { animate: false });
+      }
+    }
+
+    function updateZoomDisplay() {
+      const z = map.getZoom();
+      const zoomEl = document.getElementById('stat-zoom');
+      if (zoomEl) {
+        const desc = z < 6 ? 'India' : (z < 9 ? 'Regional' : (z < 12 ? 'Corridor' : 'Yard Tracks'));
+        zoomEl.textContent = `z${z.toFixed(1)} (${desc})`;
+      }
+    }
+    map.on('move', drawCanvasRadar);
+    map.on('zoom', () => {
+      updateZoomDisplay();
+      drawCanvasRadar();
+    });
+    map.on('viewreset', drawCanvasRadar);
+    updateZoomDisplay();
+
+    let mouseRafPending = false;
+    canvasOverlay.addEventListener('mousemove', (e) => {
+      mousePos.x = e.clientX;
+      mousePos.y = e.clientY;
+      if (!mouseRafPending) {
+        mouseRafPending = true;
+        requestAnimationFrame(() => {
+          drawCanvasRadar();
+          mouseRafPending = false;
+        });
+      }
+    });
+
+    canvasOverlay.addEventListener('mouseleave', () => {
+      mousePos.x = -100;
+      mousePos.y = -100;
+      radarTooltip.classList.add('hidden');
+      drawCanvasRadar();
+    });
+
+    canvasOverlay.addEventListener('click', () => {
+      if (hoveredTrain) selectTrain(hoveredTrain.id);
+    });
+
+    // ==========================================
+    // 10. REAL-TIME SERVER-SENT EVENTS (SSE) & DELTA STREAMING
+    // ==========================================
+    let sseSource = null;
+
+    function initSSEStreaming() {
+      if (!window.EventSource) return;
+
+      try {
+        sseSource = new EventSource('/api/trains/stream');
+
+        sseSource.onopen = () => {
+          const badge = document.getElementById('sync-stream-badge');
+          if (badge) {
+            badge.textContent = '⚡ SSE STREAM (LIVE)';
+            badge.className = 'px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[9px] font-extrabold border border-emerald-500/40';
+          }
+        };
+
+        sseSource.onmessage = (event) => {
+          try {
+            const packet = JSON.parse(event.data);
+            if (packet.type === 'init' && Array.isArray(packet.fleet)) {
+              liveTrainFleet = packet.fleet;
+              window.liveTrainFleet = liveTrainFleet;
+              updateTelemetryCounters();
+              drawCanvasRadar();
+            } else if (packet.type === 'delta' && Array.isArray(packet.trains)) {
+              // Apply delta updates in-place (<1ms execution)
+              for (let i = 0; i < packet.trains.length; i++) {
+                const delta = packet.trains[i];
+                const t = liveTrainFleet.find(item => item.id === delta.id);
+                if (t) {
+                  t.lat = delta.lat;
+                  t.lng = delta.lng;
+                  t.spd = delta.spd;
+                  t.brg = delta.brg;
+                  if (delta.sig) t.signal = delta.sig;
+                  if (delta.hdwy) t.headway_km = delta.hdwy;
+                  if (delta.dep_m !== undefined) t.dep_m = delta.dep_m;
+                }
+              }
+              if (selectedTrainId) {
+                const sel = liveTrainFleet.find(t => String(t.id) === String(selectedTrainId));
+                if (sel) updateCockpitDrawerUI(sel);
+              }
+              drawCanvasRadar();
+            }
+          } catch (e) {
+            console.warn('SSE parse error:', e);
+          }
+        };
+
+        sseSource.onerror = () => {
+          const badge = document.getElementById('sync-stream-badge');
+          if (badge) {
+            badge.textContent = '2-MIN POLLING';
+            badge.className = 'px-1 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold';
+          }
+        };
+      } catch (err) {
+        console.warn('SSE stream error, using fallback:', err);
+      }
+    }
+
+    function updateTelemetryCounters() {
+      const countEl = document.getElementById('stat-active-trains');
+      if (countEl) countEl.textContent = liveTrainFleet.length.toLocaleString();
+      const countAllEl = document.getElementById('count-all');
+      if (countAllEl) countAllEl.textContent = liveTrainFleet.length.toLocaleString();
+
+      const vbCount = liveTrainFleet.filter(t => t.cat === 'VB').length;
+      const rajCount = liveTrainFleet.filter(t => t.cat === 'RAJ').length;
+      const frtCount = liveTrainFleet.filter(t => t.cat === 'FRT').length;
+      const fastCount = liveTrainFleet.filter(t => t.spd >= 100).length;
+
+      const btnVb = document.getElementById('filter-btn-VB');
+      if (btnVb) btnVb.innerHTML = `⚡ Vande Bharat (${vbCount})`;
+      const btnRaj = document.getElementById('filter-btn-RAJ');
+      if (btnRaj) btnRaj.innerHTML = `👑 Rajdhani (${rajCount})`;
+      const btnFrt = document.getElementById('filter-btn-FRT');
+      if (btnFrt) btnFrt.innerHTML = `📦 Freight (${frtCount})`;
+      const btnFast = document.getElementById('filter-btn-FAST');
+      if (btnFast) btnFast.innerHTML = `🚀 High Speed >100 (${fastCount})`;
+    }
+
+    async function syncAllIndiaLiveTrains() {
+      if (isSyncing) return;
+      isSyncing = true;
+      const spinner = document.getElementById('sync-spinner');
+      if (spinner) spinner.classList.add('animate-spin');
+
+      try {
+        const resp = await fetch(`/api/trains/live-all-india?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' }
+        });
+        if (!resp.ok) throw new Error('API status ' + resp.status);
+        const data = await resp.json();
+
+        if (Array.isArray(data) && data.length > 0) {
+          liveTrainFleet = data;
+          window.liveTrainFleet = liveTrainFleet;
+          nextSyncEpoch = Date.now() + 120000;
+          updateTelemetryCounters();
+
+          if (selectedTrainId) {
+            const curSel = liveTrainFleet.find(t => String(t.id) === String(selectedTrainId));
+            if (curSel) updateCockpitDrawerUI(curSel);
+          }
+
+          const flashBadge = document.getElementById('sync-flash-badge');
+          if (flashBadge) {
+            flashBadge.classList.remove('hidden');
+            setTimeout(() => flashBadge.classList.add('hidden'), 3000);
+          }
+          drawCanvasRadar();
+        }
+      } catch (err) {
+        console.warn('Live API poll fallback:', err);
+      } finally {
+        isSyncing = false;
+        if (spinner) spinner.classList.remove('animate-spin');
+      }
+    }
+
+    function triggerManualSync() {
+      syncAllIndiaLiveTrains();
+    }
+
+    setInterval(() => {
+      const remainingMs = Math.max(0, nextSyncEpoch - Date.now());
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      const countdownEl = document.getElementById('sync-countdown-text');
+      if (countdownEl) countdownEl.textContent = `Sync in ${remainingSec}s`;
+      if (remainingSec <= 0 && !isSyncing) syncAllIndiaLiveTrains();
+    }, 1000);
+
+    // Smooth dead-reckoning animation loop
+    let lastFrameTimestamp = performance.now();
+    function animateDeadReckoning(currentTimestamp) {
+      if (!currentTimestamp) currentTimestamp = performance.now();
+      if (isSimPlaying && liveTrainFleet.length > 0) {
+        const elapsedSec = (currentTimestamp - lastFrameTimestamp) / 1000.0;
+        const deltaSec = Math.min(0.1, Math.max(0.001, elapsedSec)) * simSpeedMultiplier;
+        const rEarth = 6371.0;
+
+        for (let i = 0; i < liveTrainFleet.length; i++) {
+          const t = liveTrainFleet[i];
+          if (t.spd && t.spd > 0 && t.nlat && t.nlng && (t.nlat !== t.lat || t.nlng !== t.lng)) {
+            const dLat = (t.nlat - t.lat) * (Math.PI / 180);
+            const dLng = (t.nlng - t.lng) * (Math.PI / 180);
+            const a = Math.sin(dLat/2)**2 + Math.cos(t.lat * Math.PI / 180) * Math.cos(t.nlat * Math.PI / 180) * Math.sin(dLng/2)**2;
+            const distToNextKm = rEarth * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+
+            if (distToNextKm < 0.03) {
+              t.lat = t.nlat;
+              t.lng = t.nlng;
+              continue;
+            }
+
+            const stepKm = (t.spd * deltaSec) / 3600.0;
+            const fraction = Math.min(1.0, stepKm / Math.max(0.001, distToNextKm));
+            t.lat = t.lat + (t.nlat - t.lat) * fraction;
+            t.lng = t.lng + (t.nlng - t.lng) * fraction;
+          }
+        }
+        drawCanvasRadar();
+      }
+      lastFrameTimestamp = currentTimestamp;
+      requestAnimationFrame(animateDeadReckoning);
+    }
+    requestAnimationFrame(animateDeadReckoning);
+
+    // ==========================================
+    // 11. TRAIN SELECTION & COCKPIT CONTROLS
+    // ==========================================
+    function selectTrain(trainId) {
+      selectedTrainId = String(trainId);
+      const train = liveTrainFleet.find(t => String(t.id) === String(trainId));
+      if (!train) return;
+
+      const drawer = document.getElementById('train-drawer');
+      drawer.classList.remove('translate-x-[110%]');
+
+      updateCockpitDrawerUI(train);
+      drawCanvasRadar();
+      map.flyTo([train.lat, train.lng], Math.max(9, map.getZoom()), { duration: 1.2 });
+    }
+
+    function updateCockpitDrawerUI(train) {
+      const typeLabel = train.cat === 'VB' ? '⚡ Vande Bharat' : 
+                        (train.cat === 'RAJ' ? '👑 Rajdhani Superfast' : 
+                        (train.cat === 'FRT' ? '📦 Freight (WAG-9)' : 'Express / Mail'));
+      document.getElementById('drawer-type-badge').textContent = typeLabel;
+      document.getElementById('drawer-train-no').textContent = '#' + train.no;
+      document.getElementById('drawer-train-name').textContent = train.name;
+      document.getElementById('drawer-route-text').textContent = `${train.stn || 'Source'} ──► ${train.nstn || 'Destination'}`;
+      
+      document.getElementById('drawer-speed').textContent = train.spd;
+      document.getElementById('drawer-speed-bar').style.width = Math.min(100, (train.spd / 160) * 100) + '%';
+      
+      const delayEl = document.getElementById('drawer-delay');
+      const delayBadge = document.getElementById('drawer-delay-badge');
+      const delayM = train.delay_m || 0;
+      if (delayM === 0) {
+        delayEl.textContent = 'RT';
+        delayEl.className = 'mono text-2xl font-extrabold text-emerald-400';
+        document.getElementById('drawer-delay-unit').textContent = 'Right Time';
+        delayBadge.textContent = `● Schedule Maintained`;
+        delayBadge.className = 'inline-block mt-2 text-[10px] font-semibold text-emerald-400';
+      } else {
+        delayEl.textContent = `+${delayM}m`;
+        delayEl.className = 'mono text-2xl font-extrabold text-amber-400';
+        document.getElementById('drawer-delay-unit').textContent = 'Recorded Delay';
+        delayBadge.textContent = `● Operational Late Running`;
+        delayBadge.className = 'inline-block mt-2 text-[10px] font-semibold text-amber-400';
+      }
+
+      // Signal aspect card
+      const sig = train.signal || 'GREEN';
+      const sigBadge = document.getElementById('drawer-signal-badge');
+      const sigMsg = document.getElementById('drawer-signal-msg');
+      const hdwyEl = document.getElementById('drawer-headway-dist');
+      hdwyEl.textContent = `${train.headway_km || 25.0} km (${sig === 'RED' ? 'Danger' : (sig === 'YELLOW' ? 'Caution' : 'Clear')})`;
+
+      if (sig === 'RED') {
+        sigBadge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1.5 signal-red-flash';
+        sigBadge.innerHTML = '<span class="h-2 w-2 rounded-full bg-red-500"></span> DANGER (STOP)';
+        sigMsg.textContent = `Preceding train within ${train.headway_km} km. Automatic train protection & braking active.`;
+      } else if (sig === 'YELLOW' || sig === 'DOUBLE_YELLOW') {
+        sigBadge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5';
+        sigBadge.innerHTML = `<span class="h-2 w-2 rounded-full bg-amber-400"></span> ${sig} (CAUTION)`;
+        sigMsg.textContent = `Caution: Preceding train detected in ${train.headway_km} km. Expect restrictive signal ahead.`;
+      } else {
+        sigBadge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5';
+        sigBadge.innerHTML = '<span class="h-2 w-2 rounded-full bg-emerald-400"></span> LINE CLEAR (GREEN)';
+        sigMsg.textContent = 'Line Clear • Maximum Permissible Speed (MPS) permitted on this track sector.';
+      }
+
+      // Dynamic Slack Recovery Card
+      const slack = train.slack_rec || {};
+      const slackNetEl = document.getElementById('drawer-slack-net');
+      const slackMsgEl = document.getElementById('drawer-slack-msg');
+      const slackBar = document.getElementById('drawer-slack-bar');
+
+      if (slack.delayed_mins > 0 && slack.recoverable_mins > 0) {
+        slackNetEl.textContent = `Net: +${slack.net_delay}m (Recovers ~${slack.recoverable_mins}m)`;
+        slackNetEl.className = 'mono text-[11px] font-extrabold text-sky-400';
+        slackMsgEl.textContent = slack.message || 'Can recover schedule on high-speed track.';
+        slackBar.style.width = Math.min(100, Math.max(10, ((slack.delayed_mins - slack.net_delay) / slack.delayed_mins) * 100)) + '%';
+      } else {
+        slackNetEl.textContent = 'Schedule Maintained';
+        slackNetEl.className = 'mono text-[11px] font-extrabold text-emerald-400';
+        slackMsgEl.textContent = slack.message || 'Running Right Time (RT). High-speed schedule maintained.';
+        slackBar.style.width = '100%';
+      }
+
+      document.getElementById('drawer-last-stn').textContent = train.stn || 'Current Sector';
+      document.getElementById('drawer-next-stn').textContent = train.nstn || 'Approaching';
+      document.getElementById('drawer-coords').textContent = `${train.lat.toFixed(4)}° N, ${train.lng.toFixed(4)}° E`;
+      document.getElementById('drawer-heading').textContent = `${train.brg}° (Track Bearing)`;
+      document.getElementById('drawer-loco').textContent = train.loco || 'WAP-7 Electric Loco';
+    }
+
+    function closeTrainDrawer() {
+      selectedTrainId = null;
+      isFollowingTrain = false;
+      document.getElementById('follow-btn-label').textContent = 'Lock Camera';
+      document.getElementById('train-drawer').classList.add('translate-x-[110%]');
+
+      if (activeRoutePolyline) {
+        map.removeLayer(activeRoutePolyline);
+        activeRoutePolyline = null;
+        window.activeRoutePolyline = null;
+      }
+      drawCanvasRadar();
+    }
+
+    function toggleFollowTrain() {
+      isFollowingTrain = !isFollowingTrain;
+      const label = document.getElementById('follow-btn-label');
+      const btn = document.getElementById('drawer-follow-btn');
+      if (isFollowingTrain) {
+        label.textContent = 'Locked (Tracking)';
+        btn.className = 'flex-1 py-2.5 px-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/25 transition';
+      } else {
+        label.textContent = 'Lock Camera';
+        btn.className = 'flex-1 py-2.5 px-3 rounded-2xl bg-sky-500 hover:bg-sky-400 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/25 transition';
+      }
+    }
+
+    async function drawFullRouteForSelectedTrain() {
+      if (!selectedTrainId) return;
+      const train = liveTrainFleet.find(t => String(t.id) === String(selectedTrainId));
+      if (!train) return;
+
+      if (activeRoutePolyline) {
+        map.removeLayer(activeRoutePolyline);
+        activeRoutePolyline = null;
+      }
+
+      try {
+        const resp = await fetch(`/api/train/${train.no}/track`);
+        const data = await resp.json();
+
+        if (data.found && Array.isArray(data.polyline) && data.polyline.length > 1) {
+          activeRoutePolyline = L.polyline(data.polyline, {
+            color: getTrainColor(train.cat),
+            weight: 5,
+            opacity: 0.95,
+            lineJoin: 'round'
+          }).addTo(map);
+          window.activeRoutePolyline = activeRoutePolyline;
+          map.fitBounds(activeRoutePolyline.getBounds(), { padding: [50, 50], maxZoom: 12 });
+          return;
+        }
+      } catch (err) {
+        console.warn('Track polyline fetch fallback:', err);
+      }
+
+      if (train.nlat && train.nlng) {
+        activeRoutePolyline = L.polyline([[train.lat, train.lng], [train.nlat, train.nlng]], {
+          color: getTrainColor(train.cat),
+          weight: 4,
+          opacity: 0.9,
+          dashArray: '6, 6'
+        }).addTo(map);
+        window.activeRoutePolyline = activeRoutePolyline;
+      }
+    }
+
+    // ==========================================
+    // 12. AIRPORT-STYLE STATION LIVE BOARD (FIDS)
+    // ==========================================
+    let currentFidsData = null;
+
+    async function openStationFIDS(stnCode) {
+      const modal = document.getElementById('station-fids-modal');
+      modal.classList.remove('hidden');
+
+      document.getElementById('fids-station-name').textContent = `LOADING ${stnCode}...`;
+      document.getElementById('fids-arrivals-tbody').innerHTML = `
+        <tr><td colspan="7" class="py-8 text-center text-slate-400">Fetching live radar satellite telemetry for station ${stnCode}...</td></tr>
+      `;
+
+      try {
+        const resp = await fetch(`/api/station/${stnCode}/live-board`);
+        const data = await resp.json();
+        currentFidsData = data;
+
+        document.getElementById('fids-station-name').textContent = `${data.station_name.toUpperCase()} (${data.station_code})`;
+        document.getElementById('fids-platform-count').textContent = `${data.total_platforms} Platforms`;
+        document.getElementById('fids-arrival-count').textContent = data.arrivals.length;
+
+        renderFidsArrivalsTable(data.arrivals);
+        renderFidsPlatformsGrid(data.total_platforms, data.platform_occupancy);
+      } catch (err) {
+        console.error('FIDS fetch error:', err);
+      }
+    }
+
+    function renderFidsArrivalsTable(arrivals) {
+      const tbody = document.getElementById('fids-arrivals-tbody');
+      if (!arrivals || arrivals.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-slate-400">No incoming trains reported within 150 km of this station.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = arrivals.map(a => {
+        const isLate = a.delay_mins > 0;
+        const color = getTrainColor(a.cat);
+        return `
+          <tr class="fids-board-row transition cursor-pointer" onclick="selectTrain('${a.no}'); closeStationFIDS();">
+            <td class="py-3 px-3">
+              <div class="font-extrabold text-amber-300 text-sm flex items-center gap-1.5">
+                <span>🚆 ${a.no}</span>
+              </div>
+              <div class="text-white font-medium text-[11px]">${a.name}</div>
+            </td>
+            <td class="py-3 px-3">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold" style="background: ${color}22; color: ${color}; border: 1px solid ${color}44">
+                ${a.cat}
+              </span>
+              <div class="text-[10px] text-slate-400 mt-1">${a.loco}</div>
+            </td>
+            <td class="py-3 px-3">
+              <div class="text-slate-200 font-semibold">${a.from}</div>
+              <div class="text-[10px] text-sky-400">──► ${a.to}</div>
+            </td>
+            <td class="py-3 px-3 font-extrabold text-white text-sm">
+              ${a.expected_time}
+            </td>
+            <td class="py-3 px-3">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isLate ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'}">
+                ${isLate ? `+${a.delay_mins}m LATE` : 'ON TIME'}
+              </span>
+            </td>
+            <td class="py-3 px-3">
+              <span class="px-2.5 py-1 rounded-lg bg-sky-500/20 text-sky-300 font-extrabold text-xs border border-sky-400/40">
+                PF ${a.platform}
+              </span>
+            </td>
+            <td class="py-3 px-3">
+              <span class="text-[11px] font-bold text-slate-200">${a.status}</span>
+              <div class="text-[10px] text-slate-400">${a.distance_km} km away • ${a.speed} km/h</div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderFidsPlatformsGrid(totalPfs, occupancy) {
+      const grid = document.getElementById('fids-platforms-grid');
+      let html = '';
+      for (let p = 1; p <= totalPfs; p++) {
+        const occ = occupancy && occupancy[p];
+        if (occ) {
+          html += `
+            <div class="bg-slate-900 border border-emerald-500/50 rounded-2xl p-4 shadow-lg flex flex-col justify-between">
+              <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span class="font-extrabold text-sm text-emerald-400">PLATFORM ${p}</span>
+                <span class="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold">OCCUPIED</span>
+              </div>
+              <div class="py-3">
+                <span class="mono text-xs font-bold text-amber-300">#${occ.train_no}</span>
+                <h4 class="text-xs font-bold text-white mt-0.5">${occ.train_name}</h4>
+                <p class="text-[10px] text-slate-400 mt-1">${occ.status}</p>
+              </div>
+              <button onclick="selectTrain('${occ.train_no}'); closeStationFIDS();" class="w-full py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500 text-sky-300 hover:text-white font-bold text-[11px] transition">
+                Track on Radar
+              </button>
+            </div>
+          `;
+        } else {
+          html += `
+            <div class="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 shadow flex flex-col justify-between opacity-75">
+              <div class="flex items-center justify-between pb-2 border-b border-slate-800/60">
+                <span class="font-bold text-sm text-slate-400">PLATFORM ${p}</span>
+                <span class="text-[9px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-bold">CLEAR</span>
+              </div>
+              <div class="py-4 text-center">
+                <span class="text-xs text-slate-500 italic">No Train Docked</span>
+              </div>
+              <div class="text-[10px] text-center text-slate-500">Berth Available</div>
+            </div>
+          `;
+        }
+      }
+      grid.innerHTML = html;
+    }
+
+    function switchFidsTab(tab) {
+      const arrView = document.getElementById('fids-view-arrivals');
+      const pfView = document.getElementById('fids-view-platforms');
+      const arrBtn = document.getElementById('fids-tab-arrivals');
+      const pfBtn = document.getElementById('fids-tab-platforms');
+
+      if (tab === 'arrivals') {
+        arrView.classList.remove('hidden');
+        pfView.classList.add('hidden');
+        arrBtn.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold bg-sky-500 text-white shadow transition';
+        pfBtn.className = 'px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800 transition';
+      } else {
+        arrView.classList.add('hidden');
+        pfView.classList.remove('hidden');
+        pfBtn.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold bg-sky-500 text-white shadow transition';
+        arrBtn.className = 'px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800 transition';
+      }
+    }
+
+    function closeStationFIDS() {
+      document.getElementById('station-fids-modal').classList.add('hidden');
+    }
+
+    // FIDS Live Clock Ticker
+    setInterval(() => {
+      const clockEl = document.getElementById('fids-live-clock');
+      if (clockEl) {
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        const ss = String(now.getSeconds()).padStart(2, '0');
+        clockEl.textContent = `${hh}:${mm}:${ss} IST`;
+      }
+    }, 1000);
+
+    // ==========================================
+    // 13. FILTER & SEARCH HANDLERS
+    // ==========================================
+    function setFilter(filterType) {
+      activeFilter = filterType;
+      document.querySelectorAll('.filter-pill').forEach(btn => {
+        btn.className = 'filter-pill px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition';
+      });
+      const activeBtn = document.getElementById(`filter-btn-${filterType}`);
+      if (activeBtn) {
+        activeBtn.className = 'filter-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-sky-500 text-white shadow-md shadow-sky-500/30 transition';
+      }
+      drawCanvasRadar();
+    }
+
+    const searchInput = document.getElementById('train-search');
+    const searchClear = document.getElementById('search-clear-btn');
+
+    searchInput.addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      if (q.length > 0) {
+        searchClear.classList.remove('hidden');
+        
+        // Match train
+        const match = liveTrainFleet.find(t => 
+          t.no.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)
+        );
+        if (match) {
+          selectTrain(match.id);
+          return;
+        }
+
+        // Match station hub
+        const hubMatch = majorHubs.find(h => 
+          h.code.toLowerCase() === q || h.name.toLowerCase().includes(q)
+        );
+        if (hubMatch) {
+          map.flyTo([hubMatch.lat, hubMatch.lng], 11, { duration: 1.5 });
+        }
+      } else {
+        searchClear.classList.add('hidden');
+      }
+    });
+
+    searchClear.addEventListener('click', () => {
+      searchInput.value = '';
+      searchClear.classList.add('hidden');
+      closeTrainDrawer();
+    });
+
+    function flyToLocation(lat, lng, zoom, label) {
+      document.getElementById('jump-menu-dropdown').classList.add('hidden');
+      map.flyTo([lat, lng], zoom, { duration: 1.8 });
+    }
+
+    const jumpBtn = document.getElementById('jump-menu-btn');
+    const jumpMenu = document.getElementById('jump-menu-dropdown');
+    jumpBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      jumpMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => jumpMenu.classList.add('hidden'));
+
+    function toggleSimPlay() {
+      isSimPlaying = !isSimPlaying;
+      const icon = document.getElementById('play-pause-icon');
+      if (isSimPlaying) {
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />';
+        icon.className = 'w-4 h-4 text-emerald-400';
+      } else {
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />';
+        icon.className = 'w-4 h-4 text-amber-400';
+      }
+    }
+
+    function cycleSimSpeed() {
+      const speeds = [1, 2, 5, 10];
+      const curIdx = speeds.indexOf(simSpeedMultiplier);
+      simSpeedMultiplier = speeds[(curIdx + 1) % speeds.length];
+      document.getElementById('speed-chip').textContent = simSpeedMultiplier + 'x';
+    }
+
+    // Expose globals for inspection, testing, and devtools
+    window.map = map;
+    window.liveTrainFleet = liveTrainFleet;
+    window.drawCanvasRadar = drawCanvasRadar;
+    window.setFilter = setFilter;
+    window.selectTrain = selectTrain;
+    window.syncAllIndiaLiveTrains = syncAllIndiaLiveTrains;
+    window.triggerManualSync = triggerManualSync;
+    window.toggleSpeedDisplayMode = toggleSpeedDisplayMode;
+    window.toggleNightMode = toggleNightMode;
+    window.toggleBottlenecks = toggleBottlenecks;
+    window.openStationFIDS = openStationFIDS;
+    window.closeStationFIDS = closeStationFIDS;
+    window.drawFullRouteForSelectedTrain = drawFullRouteForSelectedTrain;
+
+    // Launch processes
+    renderHubMarkers();
+    initSSEStreaming();
+    syncAllIndiaLiveTrains();
+  </script>
+</body>
+</html>

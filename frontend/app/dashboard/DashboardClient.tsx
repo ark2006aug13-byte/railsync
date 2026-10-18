@@ -8,6 +8,8 @@ import { Page1Search } from '@/src/components/Page1Search'
 import { Page2LiveArrival } from '@/src/components/Page2LiveArrival'
 import { Page3Diagnostics } from '@/src/components/Page3Diagnostics'
 import { Page4PlatformResolver } from '@/src/components/Page4PlatformResolver'
+import { LiveTrainRadar } from '@/src/components/LiveTrainRadar'
+import { DynamicETADashboard } from '@/src/components/DynamicETADashboard'
 import { signOut } from '@/app/auth/actions'
 
 interface DashboardClientProps {
@@ -15,8 +17,8 @@ interface DashboardClientProps {
 }
 
 export default function DashboardClient({ userEmail }: DashboardClientProps) {
-  // Page 1 (search) is the default screen after login as requested
-  const [currentPage, setCurrentPage] = useState<PageId>('search')
+  // Page 1 (search) or radar can be accessed
+  const [currentPage, setCurrentPage] = useState<PageId>('radar')
   const [currentTrain, setCurrentTrain] = useState<string>('')
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const now = new Date()
@@ -31,7 +33,9 @@ export default function DashboardClient({ userEmail }: DashboardClientProps) {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '')
-      if (hash === 'network-overview' || hash === 'search') {
+      if (hash === 'live-radar' || hash === 'radar') {
+        setCurrentPage('radar')
+      } else if (hash === 'network-overview' || hash === 'search') {
         setCurrentPage('search')
       } else if (hash === 'live-telemetry' || hash === 'live-arrival') {
         setCurrentPage('live-arrival')
@@ -39,6 +43,8 @@ export default function DashboardClient({ userEmail }: DashboardClientProps) {
         setCurrentPage('diagnostics')
       } else if (hash === 'station-ops-console' || hash === 'platform-resolver') {
         setCurrentPage('platform-resolver')
+      } else if (hash === 'eta-predictor' || hash === 'dynamic-eta') {
+        setCurrentPage('eta-predictor')
       }
     }
 
@@ -55,10 +61,12 @@ export default function DashboardClient({ userEmail }: DashboardClientProps) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
 
     let hash = ''
-    if (page === 'search') hash = 'network-overview'
+    if (page === 'radar') hash = 'live-radar'
+    else if (page === 'search') hash = 'network-overview'
     else if (page === 'live-arrival') hash = 'live-telemetry'
     else if (page === 'diagnostics') hash = 'corridor-analytics'
     else if (page === 'platform-resolver') hash = 'station-ops-console'
+    else if (page === 'eta-predictor') hash = 'eta-predictor'
 
     window.history.pushState(null, '', `#${hash}`)
   }
@@ -80,6 +88,23 @@ export default function DashboardClient({ userEmail }: DashboardClientProps) {
 
       {/* Main Screen Content */}
       <main className="flex-1 w-full pt-16">
+        {currentPage === 'radar' && (
+          <LiveTrainRadar
+            onSelectTrainForPredictor={(tNo) => {
+              setCurrentTrain(tNo);
+              navigateTo('eta-predictor');
+            }}
+            onNavigateToTelemetry={(tNo) => {
+              setCurrentTrain(tNo);
+              navigateTo('live-arrival');
+            }}
+          />
+        )}
+
+        {currentPage === 'eta-predictor' && (
+          <DynamicETADashboard />
+        )}
+
         {currentPage === 'search' && (
           <Page1Search
             currentTrain={currentTrain}
@@ -122,7 +147,7 @@ export default function DashboardClient({ userEmail }: DashboardClientProps) {
       </main>
 
       {/* Operational Footer with UTC time & Telemetry Latency */}
-      <Footer />
+      {currentPage !== 'radar' && <Footer />}
     </div>
   )
 }

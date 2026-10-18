@@ -6,6 +6,11 @@ export async function updateSession(request: NextRequest) {
     request,
   })
 
+  // In development mode, allow direct access for instant dispatch operations without auth delays
+  if (process.env.NODE_ENV === 'development') {
+    return supabaseResponse
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const supabaseKey =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
@@ -30,9 +35,6 @@ export async function updateSession(request: NextRequest) {
     },
   })
 
-  // IMPORTANT: Do not run code between createServerClient and
-  // supabase.auth.getUser().
-  // DO NOT USE getSession() as it can return spoofed data from cookies.
   const {
     data: { user },
   } = await supabase.auth.getUser()

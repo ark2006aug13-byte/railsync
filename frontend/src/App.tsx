@@ -6,17 +6,21 @@ import { Page1Search } from './components/Page1Search';
 import { Page2LiveArrival } from './components/Page2LiveArrival';
 import { Page3Diagnostics } from './components/Page3Diagnostics';
 import { Page4PlatformResolver } from './components/Page4PlatformResolver';
+import { DynamicETADashboard } from './components/DynamicETADashboard';
+import { LiveTrainRadar } from './components/LiveTrainRadar';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<PageId>('search');
-  const [currentTrain, setCurrentTrain] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<PageId>('radar');
+  const [currentTrain, setCurrentTrain] = useState<string>('12301');
   const [isRerouted, setIsRerouted] = useState<boolean>(false);
 
   // Sync hash routing for browser back/forward and deep linking
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '');
-      if (hash === 'network-overview' || hash === 'search') {
+      if (hash === 'live-radar' || hash === 'radar') {
+        setCurrentPage('radar');
+      } else if (hash === 'network-overview' || hash === 'search') {
         setCurrentPage('search');
       } else if (hash === 'live-telemetry' || hash === 'live-arrival') {
         setCurrentPage('live-arrival');
@@ -24,6 +28,8 @@ export default function App() {
         setCurrentPage('diagnostics');
       } else if (hash === 'station-ops-console' || hash === 'platform-resolver') {
         setCurrentPage('platform-resolver');
+      } else if (hash === 'eta-predictor' || hash === 'dynamic-eta') {
+        setCurrentPage('eta-predictor');
       }
     };
 
@@ -40,10 +46,12 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     let hash = '';
-    if (page === 'search') hash = 'network-overview';
+    if (page === 'radar') hash = 'live-radar';
+    else if (page === 'search') hash = 'network-overview';
     else if (page === 'live-arrival') hash = 'live-telemetry';
     else if (page === 'diagnostics') hash = 'corridor-analytics';
     else if (page === 'platform-resolver') hash = 'station-ops-console';
+    else if (page === 'eta-predictor') hash = 'eta-predictor';
 
     window.history.pushState(null, '', `#${hash}`);
   };
@@ -59,6 +67,23 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full pt-16">
+        {currentPage === 'radar' && (
+          <LiveTrainRadar
+            onSelectTrainForPredictor={(tNo) => {
+              setCurrentTrain(tNo);
+              navigateTo('eta-predictor');
+            }}
+            onNavigateToTelemetry={(tNo) => {
+              setCurrentTrain(tNo);
+              navigateTo('live-arrival');
+            }}
+          />
+        )}
+
+        {currentPage === 'eta-predictor' && (
+          <DynamicETADashboard />
+        )}
+
         {currentPage === 'search' && (
           <Page1Search
             currentTrain={currentTrain}
@@ -97,7 +122,7 @@ export default function App() {
       </main>
 
       {/* Footer with Telemetry Status & Live UTC Clock */}
-      <Footer />
+      {currentPage !== 'radar' && <Footer />}
     </div>
   );
 }

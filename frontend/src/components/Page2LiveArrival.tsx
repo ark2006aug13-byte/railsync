@@ -780,7 +780,7 @@ export const Page2LiveArrival: React.FC<Page2LiveArrivalProps> = ({
                             }`}
                           >
                             {isPassed
-                              ? 'Departed'
+                              ? (stn.delayMin > 0 ? `+${stn.delayMin}m Late` : 'Departed OT')
                               : stn.delayMin > 0
                               ? `+${stn.delayMin}m`
                               : 'On-Time'}

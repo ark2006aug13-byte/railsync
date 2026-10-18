@@ -135,7 +135,31 @@ class WeatherEngine:
         except Exception as e:
             logger.debug(f"Cache get error: {e}")
 
-        # Try OpenWeatherMap
+        # Try Open-Meteo Live Weather & Visibility Engine (100% Free, Zero API Keys)
+        try:
+            from engine.geospatial_telemetry_engine import fetch_live_weather_and_visibility
+            om_data = fetch_live_weather_and_visibility(lat, lon)
+            if om_data and om_data.get("visibility_meters") is not None:
+                weather = {
+                    'source': 'open-meteo',
+                    'latitude': lat,
+                    'longitude': lon,
+                    'visibility': float(om_data.get('visibility_meters', 10000.0)),
+                    'precipitation_mm_hr': float(om_data.get('precipitation_mm', 0.0)),
+                    'temperature_celsius': float(om_data.get('temperature_c', 28.0)),
+                    'wind_speed_kmph': float(om_data.get('wind_speed_kmh', 10.0)),
+                    'description': om_data.get('weather_description', 'Clear'),
+                    'fog_condition': om_data.get('fog_condition', 'CLEAR'),
+                    'fog_speed_cap_kmh': om_data.get('fog_speed_cap_kmh'),
+                    'operational_alert': om_data.get('operational_alert', ''),
+                    'timestamp': om_data.get('timestamp', datetime.now().isoformat())
+                }
+                await self.cache.set(cache_key, json.dumps(weather), ex=self.ttl)
+                return weather
+        except Exception as e:
+            logger.debug(f"Open-Meteo async fetch note: {e}")
+
+        # Try OpenWeatherMap (Secondary if key present)
         owm_key = WEATHER_SOURCES['openweathermap'].get('api_key')
         if owm_key:
             try:
@@ -174,7 +198,32 @@ class WeatherEngine:
             if cached:
                 return json.loads(cached)
 
-        # 2. Try OpenWeatherMap if key is present
+        # 2. Try Open-Meteo Live Weather & Visibility Engine (100% Free, Zero API Keys)
+        try:
+            from engine.geospatial_telemetry_engine import fetch_live_weather_and_visibility
+            om_data = fetch_live_weather_and_visibility(lat, lon)
+            if om_data and om_data.get("visibility_meters") is not None:
+                weather = {
+                    'source': 'open-meteo',
+                    'latitude': lat,
+                    'longitude': lon,
+                    'visibility': float(om_data.get('visibility_meters', 10000.0)),
+                    'precipitation_mm_hr': float(om_data.get('precipitation_mm', 0.0)),
+                    'temperature_celsius': float(om_data.get('temperature_c', 28.0)),
+                    'wind_speed_kmph': float(om_data.get('wind_speed_kmh', 10.0)),
+                    'description': om_data.get('weather_description', 'Clear'),
+                    'fog_condition': om_data.get('fog_condition', 'CLEAR'),
+                    'fog_speed_cap_kmh': om_data.get('fog_speed_cap_kmh'),
+                    'operational_alert': om_data.get('operational_alert', ''),
+                    'timestamp': om_data.get('timestamp', datetime.now().isoformat())
+                }
+                if hasattr(self.cache, "set_sync"):
+                    self.cache.set_sync(cache_key, json.dumps(weather), ex=self.ttl)
+                return weather
+        except Exception as e:
+            logger.debug(f"Open-Meteo sync fetch note: {e}")
+
+        # 3. Try OpenWeatherMap if key is present
         owm_key = WEATHER_SOURCES['openweathermap'].get('api_key')
         if owm_key:
             try:
@@ -185,7 +234,7 @@ class WeatherEngine:
             except Exception as e:
                 logger.warning(f"OpenWeatherMap sync failed: {e}")
 
-        # 3. Try Airport METAR (free public data)
+        # 4. Try Airport METAR (free public data)
         try:
             weather = self._fetch_metar_weather(lat, lon)
             if weather and not weather.get('error'):
@@ -195,7 +244,7 @@ class WeatherEngine:
         except Exception as e:
             logger.warning(f"Airport METAR sync failed: {e}")
 
-        # 4. Climatological fallback
+        # 5. Climatological fallback
         fallback = self._get_climatological_fallback(lat, lon)
         if hasattr(self.cache, "set_sync"):
             self.cache.set_sync(cache_key, json.dumps(fallback), ex=self.ttl)

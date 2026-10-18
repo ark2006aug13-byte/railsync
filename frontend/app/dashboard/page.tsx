@@ -6,6 +6,11 @@ import DashboardClient from './DashboardClient'
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
+  // In development mode, provide a default authorized dispatcher session immediately
+  if (process.env.NODE_ENV === 'development') {
+    return <DashboardClient userEmail="dispatcher@railsync.org" />
+  }
+
   const supabase = await createClient()
 
   const {

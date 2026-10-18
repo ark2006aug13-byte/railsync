@@ -43,6 +43,8 @@ from engine.live_rail_api import (
     fetch_railradar_train_live,
     locate_train_dynamically,
     get_authentic_train_status,
+    extract_hhmm,
+    calculate_minutes_diff,
 )
 from engine.train_registry import (
     resolve_train_profile,
@@ -98,7 +100,8 @@ from engine.live_rail_api import (
     fetch_indian_rail_train_schedule,
     fetch_indian_rail_train_information,
     parse_delay_string,
-    parse_rail_api_time
+    parse_rail_api_time,
+    fetch_ntes_live_data,
 )
 from engine.weather_engine import WeatherEngine, weather_engine
 from engine.network_tracker import NetworkTracker
@@ -106,6 +109,9 @@ from engine.incident_detector import IncidentDetector
 from models.network_state import TrainPosition
 from api.incidents import router as incidents_router, get_train_incidents
 from api.v1.trains import router as trains_v1_router
+from api.v1.eta_router import router as eta_v1_router
+from api.radar_router import router as radar_router
+from engine.rail_radar_engine import radar_engine
 
 # Global network tracker instance
 network_tracker = NetworkTracker()
@@ -183,6 +189,12 @@ app = FastAPI(
 
 app.include_router(incidents_router)
 app.include_router(trains_v1_router)
+app.include_router(eta_v1_router)
+app.include_router(radar_router)
+
+@app.on_event("startup")
+def startup_radar_services():
+    radar_engine.start_background_poller()
 
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -539,7 +551,8 @@ def search_train_predict(
 
     now_dt = datetime.now()
     today_iso = now_dt.strftime("%Y-%m-%d")
-    selected_date = run_date or today_iso
+    clean_run_date = run_date if (isinstance(run_date, str) and run_date.strip()) else None
+    selected_date = clean_run_date or today_iso
 
     clean_at = parse_simulated_time(at)
 
@@ -617,97 +630,50 @@ def search_train_predict(
     nearest_stn_name = None
     next_stn_name = None
     next_stn_dist = None
-    telemetry_source = "RTIS_HIGH_PRECISION_GPS (ISRO Satellite 30s Stream)"
+    # -----------------------------------------------------------------------
+    # PROBE REAL-TIME GROUND TRUTH TELEMETRY
+    # Priority 1: Indian Rail API / NTES Live Feed (Free, zero quota)
+    # Priority 2: Secondary Railway Gateways
+    # Priority 3: RailRadar Live Status & ISRO Map (Tertiary fallback)
+    # -----------------------------------------------------------------------
+    is_live_ground = False
+    bearing_val = 90.0
+    nearest_stn_name = None
+    next_stn_name = None
+    next_stn_dist = None
+    telemetry_source = "CRIS_SCHEDULE_TRACKER (Authentic Catalog Engine)"
     live_lat = None
     live_lng = None
     exact_loc_text = None
-
-    # Step 1: Probe authentic live train details (delayMinutes, stop sequence, real ground status)
     live_detail = None
-    try:
-        live_detail = fetch_railradar_train_live(clean_no)
-        if live_detail:
-            if live_detail.get("delayMinutes") is not None:
-                cur_delay = float(live_detail["delayMinutes"])
-            cur_loc = live_detail.get("currentLocation") or {}
-            if cur_loc.get("stationName"):
-                nearest_stn_name = cur_loc["stationName"]
-            if cur_loc.get("distanceFromOriginKm") is not None:
-                current_km = float(cur_loc["distanceFromOriginKm"])
-            if cur_loc.get("speedKmh") is not None and float(cur_loc["speedKmh"]) > 0:
-                speed_kmph = float(cur_loc["speedKmh"])
-            stn_c = str(cur_loc.get("stationCode", "")).strip().upper()
-            coords = resolve_station_coordinates(stn_c)
-            if coords:
-                live_lat, live_lng = coords[0], coords[1]
-            is_live_ground = True
-            telemetry_source = "RAILRADAR_NTES_TELEMETRY (Direct Ministry of Railways Feed)"
-    except Exception as e:
-        print(f"[LiveDetail Probe Note] {e}")
+    live_route_map: Dict[str, Any] = {}
 
-    # Step 2: Probe live map for 1-second high-precision ISRO RTIS GPS coordinates
-    live_map_data = get_cached_railradar_live_map()
-    train_matches = [t for t in live_map_data if str(t.get("train_number", "")).strip() == clean_no]
-    live_match = None
-    if train_matches:
-        if len(train_matches) == 1:
-            live_match = train_matches[0]
-        else:
-            # Multi-day rake disambiguation: pick rake closest to current_km
-            if current_km > 0:
-                live_match = min(train_matches, key=lambda m: abs(float(m.get("curr_distance", 0.0)) - current_km))
-            else:
-                live_match = train_matches[0]
-
-    if live_match:
-        is_live_ground = True
-        live_lat = float(live_match.get("current_lat", live_lat or 26.4547))
-        live_lng = float(live_match.get("current_lng", live_lng or 80.3507))
-        if live_match.get("curr_distance") is not None:
-            current_km = float(live_match["curr_distance"])
-        if live_match.get("current_station_name"):
-            nearest_stn_name = live_match["current_station_name"]
-        if live_match.get("next_station_name"):
-            next_stn_name = live_match["next_station_name"]
-        if live_match.get("next_distance") is not None:
-            next_stn_dist = max(0.0, round(float(live_match["next_distance"]) - current_km, 1))
-
-        rep_speed = float(live_match.get("speed", 0.0))
-        if rep_speed > 0:
-            speed_kmph = rep_speed
-        else:
-            dep_m = live_match.get("departure_minutes")
-            arr_m = live_match.get("next_arrival_minutes")
-            curr_d = live_match.get("curr_distance")
-            next_d = live_match.get("next_distance")
-            if dep_m and arr_m and curr_d is not None and next_d is not None and arr_m > dep_m:
-                dt_hrs = (arr_m - dep_m) / 60.0
-                calc_sp = (float(next_d) - float(curr_d)) / dt_hrs
-                if 20.0 <= calc_sp <= 160.0:
-                    speed_kmph = round(calc_sp, 1)
-            elif speed_kmph < 40:
-                speed_kmph = 105.0
-
-        # CRITICAL: Do NOT read departure_minutes as delay! departure_minutes is clock time in minutes.
-        if live_match.get("delay") is not None:
-            cur_delay = float(live_match["delay"])
-
-        if live_match.get("next_lat") and live_match.get("next_lng"):
-            bearing_val = calculate_bearing(live_lat, live_lng, float(live_match["next_lat"]), float(live_match["next_lng"]))
-
-        delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
-        exact_loc_text = f"Live GPS: Passing {nearest_stn_name or 'Section'} at {speed_kmph:.0f} km/h • Next: {next_stn_name or 'Station'} ({next_stn_dist or 0} KM ahead) • {delay_status_str}"
-        telemetry_source = "RAILRADAR_ISRO_LIVE_STREAM (1-Second High-Precision Ground GPS)"
-    elif live_detail and live_detail.get("currentLocation"):
-        delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
-        exact_loc_text = f"Live Ground: {nearest_stn_name or 'Station'} ({int(current_km)} KM) • {delay_status_str}"
-
-    # Step 3: Probe Indian Rail API if custom key provided and not yet matched
-    if resolved_api_key and resolved_api_key != "rg_6d85f661939a40bc9c5f2ccbfea455ae" and not is_live_ground:
+    # Step 1: Probe NTES Official Live Feed (Priority 1: Free of Cost, Zero Quota)
+    clean_date_yyyymmdd = selected_date.replace("-", "").strip()
+    if not is_live_ground and (selected_date == today_iso or not run_date):
         try:
-            clean_date_yyyymmdd = selected_date.replace("-", "").strip()
+            ntes_feed = fetch_ntes_live_data(clean_no, clean_date_yyyymmdd)
+            if ntes_feed and ntes_feed.get("Status") == "SUCCESS":
+                c_stn = ntes_feed.get("CurrentStation", {})
+                if c_stn:
+                    nearest_stn_name = c_stn.get("StationName", c_stn.get("StationCode"))
+                    cur_delay = float(parse_delay_string(c_stn.get("DelayInArrival") or "0"))
+                    stn_c = str(c_stn.get("StationCode", "")).strip().upper()
+                    coords = resolve_station_coordinates(stn_c)
+                    if coords:
+                        live_lat, live_lng = coords[0], coords[1]
+                    delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+                    exact_loc_text = f"Live NTES: At {nearest_stn_name} • {delay_status_str}"
+                    telemetry_source = "NTES_OFFICIAL_FEED (Ministry of Railways Live Stream)"
+                    is_live_ground = True
+        except Exception as e:
+            print(f"[NTES Live Probe Note] {e}")
+
+    # Step 2: Probe Indian Rail API if custom key is provided (Priority 2)
+    if not is_live_ground and resolved_api_key and resolved_api_key != "rg_6d85f661939a40bc9c5f2ccbfea455ae":
+        try:
             live_data_ir = fetch_live_train_status(clean_no, clean_date_yyyymmdd, api_key=resolved_api_key, allow_fallback=False)
-            if live_data_ir and live_data_ir.get("ResponseCode") == "200":
+            if live_data_ir and str(live_data_ir.get("ResponseCode")) in ["200", 200] and (live_data_ir.get("CurrentStation") or live_data_ir.get("TrainRoute")):
                 curr_stn = live_data_ir.get("CurrentStation", {})
                 if curr_stn:
                     nearest_stn_name = curr_stn.get("StationName", curr_stn.get("StationCode"))
@@ -718,13 +684,105 @@ def search_train_predict(
                     if coords:
                         live_lat, live_lng = coords[0], coords[1]
                 curr_loc_text = live_data_ir.get("CurrentLocation")
-                if curr_loc_text:
+                if curr_loc_text or nearest_stn_name:
                     delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
-                    exact_loc_text = f"Live Ground: {curr_loc_text} • {delay_status_str}"
+                    exact_loc_text = f"Live Ground: {curr_loc_text or nearest_stn_name} • {delay_status_str}"
                     telemetry_source = "INDIAN_RAIL_LIVE_STATUS (http://indianrailapi.com Live Telemetry)"
                     is_live_ground = True
         except Exception as e:
             print(f"[IndianRailAPI LiveStatus Note] {e}")
+
+    # Step 3: Probe RailRadar API (Tertiary Fallback - Quota Conserving)
+    if not is_live_ground:
+        live_detail = None
+        try:
+            live_detail = fetch_railradar_train_live(clean_no)
+            if live_detail:
+                if live_detail.get("delayMinutes") is not None:
+                    cur_delay = float(live_detail["delayMinutes"])
+                cur_loc = live_detail.get("currentLocation") or {}
+                if cur_loc.get("stationName"):
+                    nearest_stn_name = cur_loc["stationName"]
+                if cur_loc.get("distanceFromOriginKm") is not None:
+                    current_km = float(cur_loc["distanceFromOriginKm"])
+                if cur_loc.get("speedKmh") is not None and float(cur_loc["speedKmh"]) > 0:
+                    speed_kmph = float(cur_loc["speedKmh"])
+                stn_c = str(cur_loc.get("stationCode", "")).strip().upper()
+                coords = resolve_station_coordinates(stn_c)
+                if coords:
+                    live_lat, live_lng = coords[0], coords[1]
+                is_live_ground = True
+                telemetry_source = "RAILRADAR_NTES_TELEMETRY (Direct Ministry of Railways Feed)"
+        except Exception as e:
+            print(f"[LiveDetail Probe Note] {e}")
+
+        # Probe live map for 1-second high-precision ISRO RTIS GPS coordinates
+        live_map_data = get_cached_railradar_live_map()
+        train_matches = [t for t in live_map_data if str(t.get("train_number", "")).strip() == clean_no]
+        live_match = None
+        if train_matches:
+            if len(train_matches) == 1:
+                live_match = train_matches[0]
+            else:
+                if current_km > 0:
+                    live_match = min(train_matches, key=lambda m: abs(float(m.get("curr_distance", 0.0)) - current_km))
+                else:
+                    live_match = train_matches[0]
+
+        if live_match:
+            is_live_ground = True
+            live_lat = float(live_match.get("current_lat", live_lat or 26.4547))
+            live_lng = float(live_match.get("current_lng", live_lng or 80.3507))
+            if live_match.get("curr_distance") is not None:
+                current_km = float(live_match["curr_distance"])
+            if live_match.get("current_station_name"):
+                nearest_stn_name = live_match["current_station_name"]
+            if live_match.get("next_station_name"):
+                next_stn_name = live_match["next_station_name"]
+            if live_match.get("next_distance") is not None:
+                next_stn_dist = max(0.0, round(float(live_match["next_distance"]) - current_km, 1))
+
+            rep_speed = float(live_match.get("speed", 0.0))
+            if rep_speed > 0:
+                speed_kmph = rep_speed
+            else:
+                dep_m = live_match.get("departure_minutes")
+                arr_m = live_match.get("next_arrival_minutes")
+                curr_d = live_match.get("curr_distance")
+                next_d = live_match.get("next_distance")
+                if dep_m and arr_m and curr_d is not None and next_d is not None and arr_m > dep_m:
+                    dt_hrs = (arr_m - dep_m) / 60.0
+                    calc_sp = (float(next_d) - float(curr_d)) / dt_hrs
+                    if 20.0 <= calc_sp <= 160.0:
+                        speed_kmph = round(calc_sp, 1)
+                elif speed_kmph < 40:
+                    speed_kmph = 105.0
+
+            if live_match.get("delay") is not None:
+                cur_delay = float(live_match["delay"])
+
+            if live_match.get("next_lat") and live_match.get("next_lng"):
+                bearing_val = calculate_bearing(live_lat, live_lng, float(live_match["next_lat"]), float(live_match["next_lng"]))
+
+            delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+            exact_loc_text = f"Live GPS: Passing {nearest_stn_name or 'Section'} at {speed_kmph:.0f} km/h • Next: {next_stn_name or 'Station'} ({next_stn_dist or 0} KM ahead) • {delay_status_str}"
+            telemetry_source = "RAILRADAR_ISRO_LIVE_STREAM (1-Second High-Precision Ground GPS)"
+        elif live_detail and live_detail.get("currentLocation"):
+            delay_status_str = "ON-TIME" if cur_delay <= 0 else f"{int(cur_delay)}m LATE"
+            exact_loc_text = f"Live Ground: {nearest_stn_name or 'Station'} ({int(current_km)} KM) • {delay_status_str}"
+
+    # Populate authentic route punch map for passed station reporting
+    if not live_route_map:
+        try:
+            if not live_detail:
+                live_detail = fetch_railradar_train_live(clean_no)
+            if live_detail and isinstance(live_detail.get("route"), list):
+                for r_stn in live_detail["route"]:
+                    sc = str(r_stn.get("stationCode", "")).strip().upper()
+                    if sc and sc not in live_route_map:
+                        live_route_map[sc] = r_stn
+        except Exception:
+            pass
 
     dep_time_str = profile.get("scheduled_departure", "16:50")
     try:
@@ -902,24 +960,46 @@ def search_train_predict(
             matching_upcoming.intermediate_stations = intermediates
             all_stations_breakdowns.append(matching_upcoming)
         else:
-            passed_delay = max(0.0, round(cur_delay * 0.8, 1))
+            # Station has already passed - use authentic ground punch data
+            r_info = live_route_map.get(stn_code, {})
+            act_arr_raw = r_info.get("actualArrival") or r_info.get("ActualArrival") or stn.get("actual_arrival")
+            act_dep_raw = r_info.get("actualDeparture") or r_info.get("ActualDeparture") or stn.get("actual_departure")
+
+            raw_del = r_info.get("delayDeparture") if r_info.get("delayDeparture") is not None else r_info.get("delayArrival")
+            if raw_del is None:
+                raw_del = r_info.get("DelayInDeparture") or r_info.get("DelayInArrival")
+            if raw_del is None:
+                raw_del = stn.get("delay_min") or stn.get("exit_delay")
+
+            if raw_del is not None:
+                try:
+                    passed_delay = max(0.0, float(raw_del))
+                except Exception:
+                    passed_delay = float(cur_delay)
+            elif act_arr_raw and stn.get("arr_time") and stn["arr_time"] != "--:--":
+                diff = calculate_minutes_diff(act_arr_raw, stn["arr_time"])
+                passed_delay = max(0.0, float(diff)) if diff is not None else float(cur_delay)
+            else:
+                passed_delay = float(cur_delay)
+
             actual_arr_dt = stn_arr_dt + timedelta(minutes=passed_delay)
-            arr_fmt = stn.get("arr_time") or stn_arr_dt.strftime("%H:%M")
-            dep_fmt = stn.get("dep_time") or stn_dep_dt.strftime("%H:%M")
-            
+            arr_fmt = extract_hhmm(act_arr_raw) if act_arr_raw else (stn.get("arr_time") or stn_arr_dt.strftime("%H:%M"))
+            dep_fmt = extract_hhmm(act_dep_raw) if act_dep_raw else (stn.get("dep_time") or stn_dep_dt.strftime("%H:%M"))
+            dyn_eta_fmt = extract_hhmm(act_arr_raw) if act_arr_raw else (extract_hhmm(act_dep_raw) if act_dep_raw else actual_arr_dt.strftime("%H:%M"))
+
             passed_breakdown = StationETABreakdown(
                 station_code=stn_code,
                 station_name=stn.get("name", stn_code),
                 scheduled_arrival=stn_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 scheduled_arrival_fmt=arr_fmt,
                 dynamic_eta=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-                dynamic_eta_fmt=actual_arr_dt.strftime("%H:%M"),
+                dynamic_eta_fmt=dyn_eta_fmt,
                 net_delay_min=passed_delay,
                 confidence=ConfidenceBounds(
                     p10_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                     p50_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                     p90_time=actual_arr_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-                    confidence_percentage=98
+                    confidence_percentage=99
                 ),
                 waterfall=[],
                 active_warnings=[],

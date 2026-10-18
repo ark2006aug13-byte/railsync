@@ -166,6 +166,16 @@ class LiveTrainService:
         timeout = httpx.Timeout(self.HTTP_TIMEOUT_SECONDS)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
+            # --- Strategy 0 (Primary - Free / Zero Cost): Official Indian Railways NTES Feed ---
+            try:
+                from engine.live_rail_api import fetch_ntes_live_data
+                ntes_data = fetch_ntes_live_data(train_no, yyyymmdd)
+                if ntes_data and ntes_data.get("Status") == "SUCCESS" and ntes_data.get("TrainRoute"):
+                    logger.info(f"[LiveTrainService] Fetched live telemetry from Free NTES Feed for {train_no}")
+                    return {"provider": "ntes_official", "raw": ntes_data}
+            except Exception as e:
+                logger.debug(f"[LiveTrainService] NTES Feed exception: {e}")
+
             # --- Strategy A: Indian Rail API ---
             if self.railway_api_key:
                 indian_rail_url = (
@@ -214,22 +224,46 @@ class LiveTrainService:
                 except Exception as e:
                     logger.debug(f"[LiveTrainService] RapidAPI exception: {e}")
 
+            # --- Strategy C: RailRadar API (Tertiary Fallback) ---
+            railradar_key = os.getenv("RAILRADAR_API_KEY", "rg_6d85f661939a40bc9c5f2ccbfea455ae")
+            if railradar_key:
+                radar_url = f"https://api.railradar.in/v1/trains/{train_no}/live"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RailSync/2.0",
+                    "Authorization": f"Bearer {railradar_key}",
+                }
+                try:
+                    logger.info(f"[LiveTrainService] Querying Tertiary RailRadar for {train_no}...")
+                    resp = await client.get(radar_url, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("success") and data.get("data"):
+                            return {"provider": "railradar", "raw": data["data"]}
+                    elif resp.status_code == 429:
+                        logger.warning("[LiveTrainService] RailRadar rate-limited (HTTP 429).")
+                except httpx.TimeoutException:
+                    logger.warning("[LiveTrainService] RailRadar timed out (8.0s).")
+                except Exception as e:
+                    logger.debug(f"[LiveTrainService] RailRadar exception: {e}")
+
         return None
 
     def _normalize_payload(
         self, payload: Dict[str, Any], train_no: str, norm_date: str
     ) -> LiveTrainStatusResponse:
         """
-        Normalizes varying upstream payloads (Indian Rail API, RapidAPI, or Mock)
+        Normalizes varying upstream payloads (Indian Rail API, RapidAPI, RailRadar, or Mock)
         into the strict LiveTrainStatusResponse Pydantic model.
         """
         provider = payload.get("provider", "mock")
         raw = payload.get("raw", {})
 
-        if provider == "indian_rail_api":
+        if provider in ["indian_rail_api", "ntes_official"]:
             return self._normalize_indian_rail_api(raw, train_no, norm_date)
         elif provider == "rapidapi":
             return self._normalize_rapidapi(raw, train_no, norm_date)
+        elif provider == "railradar":
+            return self._normalize_railradar(raw, train_no, norm_date)
         else:
             return self._normalize_mock(raw, train_no, norm_date)
 
@@ -353,6 +387,119 @@ class LiveTrainService:
         data = raw.get("data") or raw
         # Map fields flexibly
         return self._normalize_mock(data, train_no, norm_date)
+
+    def _normalize_railradar(
+        self, raw: Dict[str, Any], train_no: str, norm_date: str
+    ) -> LiveTrainStatusResponse:
+        """Normalizes RailRadar upstream JSON format."""
+        train_info = raw.get("train") or {}
+        train_name = train_info.get("name") or raw.get("trainName") or f"Train {train_no}"
+        curr_loc = raw.get("currentLocation") or {}
+        curr_code = curr_loc.get("stationCode", "")
+        curr_name = curr_loc.get("stationName", curr_code)
+        raw_route = raw.get("route") or []
+
+        delay_minutes = parse_delay_minutes(raw.get("delayMinutes") or curr_loc.get("delayMinutes"))
+
+        status_raw = str(raw.get("status", "running")).lower()
+        if status_raw in ["completed", "terminated", "arrived"]:
+            status_enum = TrainStatusEnum.REACHED
+        elif status_raw in ["not_started", "not-started", "scheduled", "upcoming"]:
+            status_enum = TrainStatusEnum.YET_TO_START
+        elif status_raw in ["cancelled", "canceled"]:
+            status_enum = TrainStatusEnum.CANCELLED
+        else:
+            status_enum = TrainStatusEnum.RUNNING
+
+        stoppages: List[ScheduleStoppage] = []
+        last_stn_obj: Optional[LastStation] = None
+        next_stn_obj: Optional[NextStation] = None
+        completed_count = 0
+        current_stn_idx = -1
+
+        for idx, r in enumerate(raw_route):
+            stn_c = r.get("stationCode", "")
+            stn_n = r.get("stationName", stn_c)
+            dist = float(r.get("distance", 0.0) or 0.0)
+            arr = r.get("scheduledArrival") or "START"
+            dep = r.get("scheduledDeparture") or "END"
+
+            has_passed = str(r.get("status", "")).lower() == "departed"
+            if has_passed:
+                completed_count += 1
+            if stn_c == curr_code:
+                current_stn_idx = idx
+
+            coords = resolve_station_coordinates(stn_c)
+            lat = coords[0] if (coords and coords[0] is not None) else (r.get("lat") or 28.6415)
+            lng = coords[1] if (coords and coords[1] is not None) else (r.get("lng") or 77.2185)
+
+            stoppages.append(
+                ScheduleStoppage(
+                    station_code=stn_c,
+                    station_name=stn_n,
+                    scheduled_arrival=arr,
+                    scheduled_departure=dep,
+                    distance_km=dist,
+                    coordinates=Coordinates(latitude=lat, longitude=lng),
+                    has_passed=has_passed,
+                )
+            )
+
+        if current_stn_idx >= 0 and current_stn_idx < len(stoppages):
+            cur_s = stoppages[current_stn_idx]
+            last_stn_obj = LastStation(
+                code=cur_s.station_code,
+                name=cur_s.station_name,
+                actual_departure=cur_s.scheduled_departure if cur_s.scheduled_departure != "END" else "12:00",
+                delay_dep_minutes=delay_minutes,
+            )
+            if current_stn_idx + 1 < len(stoppages):
+                nxt_s = stoppages[current_stn_idx + 1]
+                dist_rem = max(1.0, round(nxt_s.distance_km - cur_s.distance_km, 1))
+                next_stn_obj = NextStation(
+                    code=nxt_s.station_code,
+                    name=nxt_s.station_name,
+                    scheduled_arrival=nxt_s.scheduled_arrival,
+                    estimated_arrival=nxt_s.scheduled_arrival,
+                    distance_to_go_km=dist_rem,
+                )
+
+        gps_lat = curr_loc.get("lat")
+        gps_lng = curr_loc.get("lng")
+        if gps_lat is not None and gps_lng is not None:
+            curr_coords = Coordinates(latitude=float(gps_lat), longitude=float(gps_lng))
+        else:
+            curr_coords = Coordinates(
+                latitude=stoppages[max(0, current_stn_idx)].coordinates.latitude if stoppages else 28.6415,
+                longitude=stoppages[max(0, current_stn_idx)].coordinates.longitude if stoppages else 77.2185,
+            )
+
+        speed_val = float(curr_loc.get("speed") or raw.get("speed") or (110.0 if status_enum == TrainStatusEnum.RUNNING else 0.0))
+
+        return LiveTrainStatusResponse(
+            status="success",
+            train_info=TrainInfo(
+                train_number=train_no,
+                train_name=train_name,
+                journey_date=norm_date,
+            ),
+            live_telemetry=LiveTelemetry(
+                current_status=status_enum,
+                current_coordinates=curr_coords,
+                current_speed_kmh=speed_val,
+                current_location_text=f"Near {curr_name} ({curr_code})" if curr_name else "In Transit",
+                delay_minutes=delay_minutes,
+                last_updated_time=raw.get("lastUpdatedAt") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+            route_progress=RouteProgress(
+                last_station=last_stn_obj,
+                next_station=next_stn_obj,
+                total_stations_count=len(stoppages),
+                completed_stations_count=completed_count,
+            ),
+            schedule_stoppages=stoppages,
+        )
 
     def _normalize_mock(
         self, raw: Dict[str, Any], train_no: str, norm_date: str
